@@ -21,6 +21,20 @@ use utoipa::OpenApi;
         super::handlers::buses::change_bus_allocation,
         super::handlers::buses::change_bus_capacity,
         super::handlers::buses::clear_bus_allocation,
+        super::handlers::routes::create_route,
+        super::handlers::routes::get_routes,
+        super::handlers::routes::get_route_by_id,
+        super::handlers::routes::update_route,
+        super::handlers::routes::delete_route,
+        super::handlers::routes::complete_route,
+        super::handlers::bookings::create_booking,
+        super::handlers::bookings::cancel_booking,
+        super::handlers::bookings::get_my_bookings,
+        super::handlers::bookings::get_bus_seat_status,
+        super::handlers::bookings::get_booking_by_id,
+        super::handlers::bookings::get_bookings,
+        super::handlers::bookings::board_passenger,
+        super::handlers::bookings::update_payment_status,
     ),
     components(schemas(
         super::dtos::points::CreatePointDto,
@@ -40,8 +54,23 @@ use utoipa::OpenApi;
         super::models::buses::Bus,
         super::models::buses::BusState,
         super::models::buses::BusStatus,
+        super::dtos::routes::CreateRouteDto,
+        super::dtos::routes::UpdateRouteDto,
+        super::dtos::routes::GetRoutesQuery,
+        super::models::routes::Route,
+        super::models::routes::RideType,
+        super::dtos::bookings::CreateBookingDto,
+        super::dtos::bookings::UpdateBookingStatusDto,
+        super::dtos::bookings::UpdatePaymentStatusDto,
+        super::dtos::bookings::GetBookingsQuery,
+        super::dtos::bookings::BusSeatsResponseDto,
+        super::models::bookings::Booking,
+        super::models::bookings::BookingStatus,
+        super::models::bookings::PaymentStatus,
     ))
 )]
 pub struct BusApiDoc;
 
 pub type PointsApiDoc = BusApiDoc;
+pub type RoutesApiDoc = BusApiDoc;
+pub type BookingsApiDoc = BusApiDoc;

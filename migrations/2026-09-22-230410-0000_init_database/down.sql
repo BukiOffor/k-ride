@@ -1,0 +1,7 @@
+-- Drop tables in reverse order of foreign key dependencies
+DROP TABLE IF EXISTS activity_logs CASCADE;
+DROP TABLE IF EXISTS bookings CASCADE;
+DROP TABLE IF EXISTS buses CASCADE;
+DROP TABLE IF EXISTS routes CASCADE;
+DROP TABLE IF EXISTS points CASCADE;
+DROP TABLE IF EXISTS users CASCADE;

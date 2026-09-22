@@ -41,6 +41,14 @@ pub enum ActivityType {
     BusStatusChanged,
     BusAllocationChanged,
     BusCapacityChanged,
+    RouteCreated,
+    RouteUpdated,
+    RouteDeleted,
+    RouteCompleted,
+    BookingCreated,
+    BookingCancelled,
+    BookingBoarded,
+    BookingPaymentUpdated,
 }
 
 impl FromSql<Text, diesel::pg::Pg> for ActivityType {
@@ -130,6 +138,14 @@ impl ActivityType {
             ActivityType::BusStatusChanged => "Changed bus availability status.".into(),
             ActivityType::BusAllocationChanged => "Updated bus passenger allocation.".into(),
             ActivityType::BusCapacityChanged => "Updated bus maximum capacity.".into(),
+            ActivityType::RouteCreated => "Created a new route.".into(),
+            ActivityType::RouteUpdated => "Updated route details.".into(),
+            ActivityType::RouteDeleted => "Deleted a route.".into(),
+            ActivityType::RouteCompleted => "Marked route as completed.".into(),
+            ActivityType::BookingCreated => "Created a new booking.".into(),
+            ActivityType::BookingCancelled => "Cancelled a booking.".into(),
+            ActivityType::BookingBoarded => "Boarded a passenger.".into(),
+            ActivityType::BookingPaymentUpdated => "Updated booking payment status.".into(),
         }
     }
 }

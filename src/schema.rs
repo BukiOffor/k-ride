@@ -57,9 +57,12 @@ diesel::table! {
         end_point -> Uuid,
         fare -> Float,
         distance -> Float,
+        ride_type -> Text,
         stops -> Array<Uuid>,
         departure_time -> Time,
         departure_date -> Date,
+        is_completed -> Bool,
+        time_completed -> Nullable<Timestamp>,
         created_at -> Timestamp,
         updated_at -> Timestamp,
     }
@@ -79,10 +82,26 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    bookings (id) {
+        id -> Uuid,
+        booking_ref -> Text,
+        user_id -> Uuid,
+        bus_id -> Uuid,
+        route_id -> Uuid,
+        seat_number -> Integer,
+        status -> Text,
+        payment_status -> Text,
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(
     users,
     buses,
     points,
     routes,
-    activity_logs
+    activity_logs,
+    bookings
 );

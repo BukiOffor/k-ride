@@ -1,0 +1,513 @@
+use crate::logs::{ActivityLog, ActivityType};
+use super::*;
+use diesel::prelude::*;
+use diesel::PgTextExpressionMethods;
+use diesel::OptionalExtension;
+use diesel_async::RunQueryDsl;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, LazyLock};
+use tokio::sync::Mutex;
+
+// Endpoint-level bus lock: ensures concurrent booking requests on the same bus are serialized
+static BUS_LOCKS: LazyLock<Mutex<HashMap<Uuid, Arc<Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+async fn acquire_bus_lock(bus_id: Uuid) -> Arc<Mutex<()>> {
+    let mut map = BUS_LOCKS.lock().await;
+    map.entry(bus_id)
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
+pub async fn create_booking(
+    state: Arc<AppState>,
+    payload: CreateBookingDto,
+    current_user_id: Uuid,
+    is_admin: bool,
+) -> Result<Booking, ApiError> {
+    use crate::schema::bookings::dsl as bookings_dsl;
+    use crate::schema::buses::dsl as buses_dsl;
+    use crate::schema::routes::dsl as routes_dsl;
+
+    // 1. Acquire endpoint-level concurrency lock for this bus
+    let bus_lock = acquire_bus_lock(payload.bus_id).await;
+    let _guard = bus_lock.lock().await;
+
+    let effective_user_id = if is_admin && payload.user_id.is_some() {
+        payload.user_id.unwrap()
+    } else {
+        current_user_id
+    };
+
+    let mut conn = state
+        .pool
+        .get()
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    // 2. Validate route existence
+    let route = routes_dsl::routes
+        .filter(routes_dsl::id.eq(payload.route_id))
+        .first::<Route>(&mut conn)
+        .await
+        .map_err(|e| match e {
+            diesel::result::Error::NotFound => ApiError::NotFoundError("Route not found".into()),
+            _ => ApiError::InternalError(e.to_string().into()),
+        })?;
+
+    // 3. Validate bus existence and status
+    let bus = buses_dsl::buses
+        .filter(buses_dsl::id.eq(payload.bus_id))
+        .first::<Bus>(&mut conn)
+        .await
+        .map_err(|e| match e {
+            diesel::result::Error::NotFound => ApiError::NotFoundError("Bus not found".into()),
+            _ => ApiError::InternalError(e.to_string().into()),
+        })?;
+
+    // 4. Verify bus is assigned to this route
+    if bus.current_route_id != Some(payload.route_id) {
+        return Err(ApiError::Error("Bus is not currently assigned to the specified route".into()));
+    }
+
+    // 5. Verify bus availability
+    if bus.status == BusStatus::Maintenance {
+        return Err(ApiError::Error("Bus is currently under maintenance and cannot be booked".into()));
+    }
+
+    // 6. Verify passenger capacity
+    if bus.current_passenger_count >= bus.capacity {
+        return Err(ApiError::Error("Bus is already at full capacity".into()));
+    }
+
+    // 7. Load all active booked seats on this bus
+    let active_bookings = bookings_dsl::bookings
+        .filter(bookings_dsl::bus_id.eq(payload.bus_id))
+        .filter(bookings_dsl::status.ne(BookingStatus::Cancelled))
+        .filter(bookings_dsl::status.ne(BookingStatus::Revoked))
+        .select(bookings_dsl::seat_number)
+        .load::<i32>(&mut conn)
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    let booked_set: HashSet<i32> = active_bookings.iter().cloned().collect();
+
+    // 8. Assign seat number automatically based on the last seat, or validate requested seat
+    let assigned_seat: i32 = match payload.seat_number {
+        Some(s) => {
+            if s < 1 || s > bus.capacity {
+                return Err(ApiError::Error(format!("Seat number must be between 1 and {}", bus.capacity).into()));
+            }
+            if booked_set.contains(&s) {
+                return Err(ApiError::Error(format!("Seat {} on this bus is already booked", s).into()));
+            }
+            s
+        }
+        None => {
+            // Find last booked seat and assign next
+            let last_seat = active_bookings.iter().max().cloned().unwrap_or(0);
+            let next_seat = last_seat + 1;
+            if next_seat <= bus.capacity && !booked_set.contains(&next_seat) {
+                next_seat
+            } else {
+                // If next seat exceeds capacity or is taken, pick lowest available seat
+                (1..=bus.capacity)
+                    .find(|s| !booked_set.contains(s))
+                    .ok_or_else(|| ApiError::Error("Bus is already at full capacity".into()))?
+            }
+        }
+    };
+
+    // 9. Build booking record
+    let mut new_booking = Booking::new(
+        effective_user_id,
+        payload.bus_id,
+        payload.route_id,
+        assigned_seat,
+    );
+
+    if route.fare == 0.0 {
+        new_booking.payment_status = PaymentStatus::Free;
+    }
+
+    // 10. Insert booking
+    let created_booking = diesel::insert_into(bookings_dsl::bookings)
+        .values(&new_booking)
+        .get_result::<Booking>(&mut conn)
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    // 11. Increment current_passenger_count on the bus
+    diesel::update(buses_dsl::buses.filter(buses_dsl::id.eq(payload.bus_id)))
+        .set((
+            buses_dsl::current_passenger_count.eq(bus.current_passenger_count + 1),
+            buses_dsl::updated_at.eq(chrono::Utc::now().naive_utc()),
+        ))
+        .execute(&mut conn)
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    // 12. Emit activity log
+    let mut log = ActivityLog::new(ActivityType::BookingCreated, current_user_id);
+    log.set_target_id(created_booking.id);
+    log.set_target_type("Booking".to_string());
+    if let Ok(details) = serde_json::to_value(&created_booking) {
+        log.set_details(details);
+    }
+    if let Err(e) = state.logger.try_send(log) {
+        tracing::warn!("Failed to queue activity log: {}", e);
+    }
+
+    Ok(created_booking)
+}
+
+pub async fn cancel_booking(
+    state: Arc<AppState>,
+    booking_id: Uuid,
+    current_user_id: Uuid,
+    is_admin: bool,
+) -> Result<Booking, ApiError> {
+    use crate::schema::bookings::dsl as bookings_dsl;
+    use crate::schema::buses::dsl as buses_dsl;
+
+    let mut conn = state
+        .pool
+        .get()
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    let booking = bookings_dsl::bookings
+        .filter(bookings_dsl::id.eq(booking_id))
+        .first::<Booking>(&mut conn)
+        .await
+        .map_err(|e| match e {
+            diesel::result::Error::NotFound => ApiError::NotFoundError("Booking not found".into()),
+            _ => ApiError::InternalError(e.to_string().into()),
+        })?;
+
+    // Non-admins can only cancel their own booking
+    if !is_admin && booking.user_id != current_user_id {
+        return Err(ApiError::PermissionDenied);
+    }
+
+    if booking.status == BookingStatus::Cancelled {
+        return Err(ApiError::Error("Booking is already cancelled".into()));
+    }
+
+    if booking.status == BookingStatus::Boarded {
+        return Err(ApiError::Error("Cannot cancel a booking that has already boarded".into()));
+    }
+
+    // Update status to Cancelled
+    let updated_booking = diesel::update(bookings_dsl::bookings.filter(bookings_dsl::id.eq(booking_id)))
+        .set((
+            bookings_dsl::status.eq(BookingStatus::Cancelled),
+            bookings_dsl::updated_at.eq(chrono::Utc::now().naive_utc()),
+        ))
+        .get_result::<Booking>(&mut conn)
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    // Decrement current_passenger_count on the bus
+    let bus = buses_dsl::buses
+        .filter(buses_dsl::id.eq(booking.bus_id))
+        .first::<Bus>(&mut conn)
+        .await
+        .optional()
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    if let Some(bus) = bus {
+        let new_count = (bus.current_passenger_count - 1).max(0);
+        diesel::update(buses_dsl::buses.filter(buses_dsl::id.eq(booking.bus_id)))
+            .set((
+                buses_dsl::current_passenger_count.eq(new_count),
+                buses_dsl::updated_at.eq(chrono::Utc::now().naive_utc()),
+            ))
+            .execute(&mut conn)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+    }
+
+    let mut log = ActivityLog::new(ActivityType::BookingCancelled, current_user_id);
+    log.set_target_id(booking_id);
+    log.set_target_type("Booking".to_string());
+    if let Ok(details) = serde_json::to_value(&updated_booking) {
+        log.set_details(details);
+    }
+    if let Err(e) = state.logger.try_send(log) {
+        tracing::warn!("Failed to queue activity log: {}", e);
+    }
+
+    Ok(updated_booking)
+}
+
+pub async fn board_passenger(
+    state: Arc<AppState>,
+    booking_id: Uuid,
+    admin_user_id: Uuid,
+) -> Result<Booking, ApiError> {
+    use crate::schema::bookings::dsl as bookings_dsl;
+
+    let mut conn = state
+        .pool
+        .get()
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    let booking = bookings_dsl::bookings
+        .filter(bookings_dsl::id.eq(booking_id))
+        .first::<Booking>(&mut conn)
+        .await
+        .map_err(|e| match e {
+            diesel::result::Error::NotFound => ApiError::NotFoundError("Booking not found".into()),
+            _ => ApiError::InternalError(e.to_string().into()),
+        })?;
+
+    if booking.status == BookingStatus::Cancelled || booking.status == BookingStatus::Revoked {
+        return Err(ApiError::Error("Cannot board a cancelled or revoked booking".into()));
+    }
+
+    let updated_booking = diesel::update(bookings_dsl::bookings.filter(bookings_dsl::id.eq(booking_id)))
+        .set((
+            bookings_dsl::status.eq(BookingStatus::Boarded),
+            bookings_dsl::updated_at.eq(chrono::Utc::now().naive_utc()),
+        ))
+        .get_result::<Booking>(&mut conn)
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    let mut log = ActivityLog::new(ActivityType::BookingBoarded, admin_user_id);
+    log.set_target_id(booking_id);
+    log.set_target_type("Booking".to_string());
+    if let Err(e) = state.logger.try_send(log) {
+        tracing::warn!("Failed to queue activity log: {}", e);
+    }
+
+    Ok(updated_booking)
+}
+
+pub async fn update_payment_status(
+    state: Arc<AppState>,
+    booking_id: Uuid,
+    new_payment_status: PaymentStatus,
+    admin_user_id: Uuid,
+) -> Result<Booking, ApiError> {
+    use crate::schema::bookings::dsl as bookings_dsl;
+
+    let mut conn = state
+        .pool
+        .get()
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    let updated_booking = diesel::update(bookings_dsl::bookings.filter(bookings_dsl::id.eq(booking_id)))
+        .set((
+            bookings_dsl::payment_status.eq(new_payment_status),
+            bookings_dsl::updated_at.eq(chrono::Utc::now().naive_utc()),
+        ))
+        .get_result::<Booking>(&mut conn)
+        .await
+        .map_err(|e| match e {
+            diesel::result::Error::NotFound => ApiError::NotFoundError("Booking not found".into()),
+            _ => ApiError::InternalError(e.to_string().into()),
+        })?;
+
+    let mut log = ActivityLog::new(ActivityType::BookingPaymentUpdated, admin_user_id);
+    log.set_target_id(booking_id);
+    log.set_target_type("Booking".to_string());
+    if let Err(e) = state.logger.try_send(log) {
+        tracing::warn!("Failed to queue activity log: {}", e);
+    }
+
+    Ok(updated_booking)
+}
+
+pub async fn get_booking_by_id(
+    state: Arc<AppState>,
+    booking_id: Uuid,
+    current_user_id: Uuid,
+    is_admin: bool,
+) -> Result<Booking, ApiError> {
+    use crate::schema::bookings::dsl as bookings_dsl;
+
+    let mut conn = state
+        .pool
+        .get()
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    let booking = bookings_dsl::bookings
+        .filter(bookings_dsl::id.eq(booking_id))
+        .first::<Booking>(&mut conn)
+        .await
+        .map_err(|e| match e {
+            diesel::result::Error::NotFound => ApiError::NotFoundError("Booking not found".into()),
+            _ => ApiError::InternalError(e.to_string().into()),
+        })?;
+
+    if !is_admin && booking.user_id != current_user_id {
+        return Err(ApiError::PermissionDenied);
+    }
+
+    Ok(booking)
+}
+
+pub async fn get_my_bookings(
+    state: Arc<AppState>,
+    user_id: Uuid,
+    params: GetBookingsQuery,
+) -> Result<Vec<Booking>, ApiError> {
+    use crate::schema::bookings::dsl as bookings_dsl;
+
+    let mut conn = state
+        .pool
+        .get()
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    let mut query = crate::schema::bookings::table
+        .filter(bookings_dsl::user_id.eq(user_id))
+        .into_boxed::<diesel::pg::Pg>();
+
+    if let Some(bus) = params.bus_id {
+        query = query.filter(bookings_dsl::bus_id.eq(bus));
+    }
+
+    if let Some(route) = params.route_id {
+        query = query.filter(bookings_dsl::route_id.eq(route));
+    }
+
+    if let Some(st) = params.status {
+        query = query.filter(bookings_dsl::status.eq(st));
+    }
+
+    if let Some(ps) = params.payment_status {
+        query = query.filter(bookings_dsl::payment_status.eq(ps));
+    }
+
+    query = query.order(bookings_dsl::created_at.desc());
+
+    if let Some(pagination) = params.pagination {
+        let size = pagination.size.max(1) as i64;
+        let page = pagination.page.max(1);
+        let offset = ((page - 1) * pagination.size.max(1)) as i64;
+        query = query.limit(size).offset(offset);
+    }
+
+    let result = query
+        .load::<Booking>(&mut conn)
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    Ok(result)
+}
+
+pub async fn get_bookings(
+    state: Arc<AppState>,
+    params: GetBookingsQuery,
+) -> Result<Vec<Booking>, ApiError> {
+    use crate::schema::bookings::dsl as bookings_dsl;
+
+    let mut conn = state
+        .pool
+        .get()
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    let mut query = crate::schema::bookings::table.into_boxed::<diesel::pg::Pg>();
+
+    if let Some(u) = params.user_id {
+        query = query.filter(bookings_dsl::user_id.eq(u));
+    }
+
+    if let Some(bus) = params.bus_id {
+        query = query.filter(bookings_dsl::bus_id.eq(bus));
+    }
+
+    if let Some(route) = params.route_id {
+        query = query.filter(bookings_dsl::route_id.eq(route));
+    }
+
+    if let Some(st) = params.status {
+        query = query.filter(bookings_dsl::status.eq(st));
+    }
+
+    if let Some(ps) = params.payment_status {
+        query = query.filter(bookings_dsl::payment_status.eq(ps));
+    }
+
+    if let Some(ref r) = params.booking_ref {
+        let r = r.trim();
+        if !r.is_empty() {
+            query = query.filter(bookings_dsl::booking_ref.ilike(format!("%{}%", r)));
+        }
+    }
+
+    query = query.order(bookings_dsl::created_at.desc());
+
+    if let Some(pagination) = params.pagination {
+        let size = pagination.size.max(1) as i64;
+        let page = pagination.page.max(1);
+        let offset = ((page - 1) * pagination.size.max(1)) as i64;
+        query = query.limit(size).offset(offset);
+    }
+
+    let result = query
+        .load::<Booking>(&mut conn)
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    Ok(result)
+}
+
+pub async fn get_bus_seat_status(
+    state: Arc<AppState>,
+    bus_id: Uuid,
+) -> Result<BusSeatsResponseDto, ApiError> {
+    use crate::schema::bookings::dsl as bookings_dsl;
+    use crate::schema::buses::dsl as buses_dsl;
+
+    let mut conn = state
+        .pool
+        .get()
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    let bus = buses_dsl::buses
+        .filter(buses_dsl::id.eq(bus_id))
+        .first::<Bus>(&mut conn)
+        .await
+        .map_err(|e| match e {
+            diesel::result::Error::NotFound => ApiError::NotFoundError("Bus not found".into()),
+            _ => ApiError::InternalError(e.to_string().into()),
+        })?;
+
+    // Load active booked seat numbers
+    let active_bookings = bookings_dsl::bookings
+        .filter(bookings_dsl::bus_id.eq(bus_id))
+        .filter(bookings_dsl::status.ne(BookingStatus::Cancelled))
+        .filter(bookings_dsl::status.ne(BookingStatus::Revoked))
+        .select(bookings_dsl::seat_number)
+        .load::<i32>(&mut conn)
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    let booked_set: HashSet<i32> = active_bookings.iter().cloned().collect();
+    let mut available_seats = Vec::new();
+    for seat in 1..=bus.capacity {
+        if !booked_set.contains(&seat) {
+            available_seats.push(seat);
+        }
+    }
+
+    let mut booked_seats = active_bookings;
+    booked_seats.sort_unstable();
+
+    Ok(BusSeatsResponseDto {
+        bus_id,
+        capacity: bus.capacity,
+        current_passenger_count: bus.current_passenger_count,
+        booked_seats,
+        available_seats,
+    })
+}
