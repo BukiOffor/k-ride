@@ -28,6 +28,19 @@ pub enum ActivityType {
     UserActivation,
     UserDeactivation,
     UserDeleted,
+    PointCreated,
+    PointUpdated,
+    PointDeleted,
+    BusCreated,
+    BusUpdated,
+    BusDeleted,
+    BusRoutesReset,
+    BusReset,
+    BusStateChanged,
+    BusRouteChanged,
+    BusStatusChanged,
+    BusAllocationChanged,
+    BusCapacityChanged,
 }
 
 impl FromSql<Text, diesel::pg::Pg> for ActivityType {
@@ -56,7 +69,7 @@ impl ActivityLog {
             details: Value::Null,
             ip_address: None,
             user_agent: None,
-            created_at: chrono::Local::now().naive_local(),
+            created_at: chrono::Utc::now().naive_utc(),
         }
     }
     pub fn set_target_id(&mut self, target_id: Uuid) -> &mut Self {
@@ -103,7 +116,20 @@ impl ActivityType {
             ActivityType::UserUpdated => "Updated a user's information.".into(),
             ActivityType::UserActivation => "Activated a user account.".into(),
             ActivityType::UserDeactivation => "Deactivated a user account.".into(),
-            ActivityType::UserDeleted => "Deleted a user.".into(),          
+            ActivityType::UserDeleted => "Deleted a user.".into(),
+            ActivityType::PointCreated => "Created a new bus point/station.".into(),
+            ActivityType::PointUpdated => "Updated bus point/station information.".into(),
+            ActivityType::PointDeleted => "Deleted a bus point/station.".into(),
+            ActivityType::BusCreated => "Created a new bus.".into(),
+            ActivityType::BusUpdated => "Updated bus details.".into(),
+            ActivityType::BusDeleted => "Deleted a bus.".into(),
+            ActivityType::BusRoutesReset => "Reset all bus routes and allocations.".into(),
+            ActivityType::BusReset => "Reset bus route, state, and passenger allocation.".into(),
+            ActivityType::BusStateChanged => "Changed bus transit/operating state.".into(),
+            ActivityType::BusRouteChanged => "Changed bus assigned route.".into(),
+            ActivityType::BusStatusChanged => "Changed bus availability status.".into(),
+            ActivityType::BusAllocationChanged => "Updated bus passenger allocation.".into(),
+            ActivityType::BusCapacityChanged => "Updated bus maximum capacity.".into(),
         }
     }
 }

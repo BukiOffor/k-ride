@@ -47,7 +47,7 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-fn extract_connection_info(log: &mut ActivityLog, headers: &HeaderMap) {
+fn log_activity(state: &Arc<AppState>, mut log: ActivityLog, headers: &HeaderMap) {
     if let Some(ua) = headers.get(axum::http::header::USER_AGENT).and_then(|v| v.to_str().ok()) {
         log.set_user_agent(ua.to_string());
     }
@@ -57,6 +57,9 @@ fn extract_connection_info(log: &mut ActivityLog, headers: &HeaderMap) {
         .and_then(|v| v.to_str().ok())
     {
         log.set_ip_address(ip.to_string());
+    }
+    if let Err(e) = state.logger.try_send(log) {
+        tracing::warn!("Activity log channel full or closed, dropped log: {}", e);
     }
 }
 
@@ -86,8 +89,7 @@ pub async fn create_user(
     if let Ok(details) = serde_json::to_value(&response.data) {
         log.set_details(details);
     }
-    extract_connection_info(&mut log, &headers);
-    let _ = state.logger.send(log).await;
+    log_activity(&state, log, &headers);
 
     Ok(Json(response))
 }
@@ -123,8 +125,7 @@ pub async fn assign_role_to_user(
         "action": "assign_role",
         "role": payload.role,
     }));
-    extract_connection_info(&mut log, &headers);
-    let _ = state.logger.send(log).await;
+    log_activity(&state, log, &headers);
 
     let response = Message::context("Role assigned to user successfully.", response);
     Ok(Json(response))
@@ -153,8 +154,7 @@ pub async fn register_user(
     if let Ok(details) = serde_json::to_value(&response.data) {
         log.set_details(details);
     }
-    extract_connection_info(&mut log, &headers);
-    let _ = state.logger.send(log).await;
+    log_activity(&state, log, &headers);
 
     Ok(Json(response))
 }
@@ -242,8 +242,7 @@ pub async fn update_user(
     if let Ok(details) = serde_json::to_value(&payload) {
         log.set_details(details);
     }
-    extract_connection_info(&mut log, &headers);
-    let _ = state.logger.send(log).await;
+    log_activity(&state, log, &headers);
 
     let response = Message::context("User updated successfully.", user);
     Ok(Json(response))
@@ -275,8 +274,7 @@ pub async fn activate_user(
     let mut log = ActivityLog::new(ActivityType::UserActivation, claims.user_id);
     log.set_target_id(user_id);
     log.set_target_type("User".to_string());
-    extract_connection_info(&mut log, &headers);
-    let _ = state.logger.send(log).await;
+    log_activity(&state, log, &headers);
 
     let response = Message::context("User activated successfully.", user);
     Ok(Json(response))
@@ -308,8 +306,7 @@ pub async fn deactivate_user(
     let mut log = ActivityLog::new(ActivityType::UserDeactivation, claims.user_id);
     log.set_target_id(user_id);
     log.set_target_type("User".to_string());
-    extract_connection_info(&mut log, &headers);
-    let _ = state.logger.send(log).await;
+    log_activity(&state, log, &headers);
 
     let response = Message::context("User deactivated successfully.", user);
     Ok(Json(response))
@@ -341,8 +338,7 @@ pub async fn delete_user(
     let mut log = ActivityLog::new(ActivityType::UserDeleted, claims.user_id);
     log.set_target_id(user_id);
     log.set_target_type("User".to_string());
-    extract_connection_info(&mut log, &headers);
-    let _ = state.logger.send(log).await;
+    log_activity(&state, log, &headers);
 
     let response = Message::context("User deleted successfully.", user);
     Ok(Json(response))

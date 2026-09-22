@@ -26,24 +26,38 @@ pub async fn start_log_workers(
     receiver: async_channel::Receiver<ActivityLog>,
     log_workers: usize,
 ) {
-    info!("Spawning Log Workers: spawing {}", log_workers);
-    (1..=log_workers).for_each(|i| {
-        info!("Spawning Log Worker Number: {}", i);
+    info!("Spawning {} log worker(s)", log_workers);
+    for i in 1..=log_workers {
         let receiver = receiver.clone();
         let pool = state.pool.clone();
         tokio::spawn(async move {
-            let mut conn = pool.get()
-                .await
-                .expect("Could not get connection pool");
-            while let Ok(payload) = receiver.recv().await {
-                info!("got log = {:?}", payload);
-                crate::logs::services::emit_log(payload, &mut conn)
-                    .await
-                    .unwrap_or_else(|e| {
-                        tracing::error!("Error emitting log: {}", e);
-                    });
+            tracing::debug!("Log worker #{} started", i);
+            while let Ok(first) = receiver.recv().await {
+                let mut batch = vec![first];
+                while batch.len() < 50 {
+                    match receiver.try_recv() {
+                        Ok(item) => batch.push(item),
+                        Err(_) => break,
+                    }
+                }
+
+                match pool.get().await {
+                    Ok(mut conn) => {
+                        if let Err(e) = crate::logs::services::emit_logs(&batch, &mut conn).await {
+                            tracing::error!("Error emitting log batch: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Could not get connection from pool for log worker #{}: {}",
+                            i,
+                            e
+                        );
+                    }
+                }
             }
+            tracing::debug!("Log worker #{} stopped", i);
         });
-    });
+    }
     info!("Spawned Log Workers Successfully");
 }

@@ -3,10 +3,11 @@ use super::*;
 #[derive(
     Debug,
     Clone,
+    Serialize,
+    Deserialize,
     Queryable,
     Identifiable,
     Selectable,
-    Deserialize,
     Insertable,
     AsChangeset,
     utoipa::ToSchema,
