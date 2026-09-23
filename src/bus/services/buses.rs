@@ -270,6 +270,24 @@ pub async fn change_bus_route(
         .await
         .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
 
+    if let Some(r_id) = new_route_id {
+        use crate::schema::routes::dsl as routes_dsl;
+        let route = routes_dsl::routes
+            .filter(routes_dsl::id.eq(r_id))
+            .first::<crate::bus::models::routes::Route>(&mut conn)
+            .await
+            .map_err(|e| match e {
+                diesel::result::Error::NotFound => {
+                    ApiError::NotFoundError("Route not found".into())
+                }
+                _ => ApiError::InternalError(e.to_string().into()),
+            })?;
+
+        if route.is_completed {
+            return Err(ApiError::BadRequest("Cannot assign bus to a completed route"));
+        }
+    }
+
     let updated_bus = diesel::update(buses.filter(id.eq(bus_id)))
         .set((
             current_route_id.eq(new_route_id),
@@ -515,6 +533,81 @@ pub async fn clear_bus_allocation(
     log.set_target_type("Bus".to_string());
     log.set_details(serde_json::json!({
         "cleared_allocation": true
+    }));
+    if let Err(e) = app_state.logger.try_send(log) {
+        tracing::warn!("Failed to queue activity log: {}", e);
+    }
+
+    Ok(updated_bus)
+}
+
+pub async fn assign_bus_to_route(
+    app_state: Arc<AppState>,
+    bus_id: Uuid,
+    route_id: Uuid,
+    user_id: Uuid,
+) -> Result<Bus, ApiError> {
+    use crate::schema::buses::dsl::*;
+    use crate::schema::routes::dsl as routes_dsl;
+
+    let mut conn = app_state
+        .pool
+        .get()
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    // 1. Verify bus exists and is not under maintenance
+    let bus = buses
+        .filter(id.eq(bus_id))
+        .first::<Bus>(&mut conn)
+        .await
+        .map_err(|e| match e {
+            diesel::result::Error::NotFound => ApiError::NotFoundError("Bus not found".into()),
+            _ => ApiError::InternalError(e.to_string().into()),
+        })?;
+
+    if bus.status == BusStatus::Maintenance {
+        return Err(ApiError::BadRequest(
+            "Cannot assign route to a bus currently under maintenance",
+        ));
+    }
+
+    // 2. Verify route exists and is not completed
+    let route = routes_dsl::routes
+        .filter(routes_dsl::id.eq(route_id))
+        .first::<crate::bus::models::routes::Route>(&mut conn)
+        .await
+        .map_err(|e| match e {
+            diesel::result::Error::NotFound => ApiError::NotFoundError("Route not found".into()),
+            _ => ApiError::InternalError(e.to_string().into()),
+        })?;
+
+    if route.is_completed {
+        return Err(ApiError::BadRequest(
+            "Cannot assign bus to a completed route",
+        ));
+    }
+
+    // 3. Update the bus with the route assignment
+    let updated_bus = diesel::update(buses.filter(id.eq(bus_id)))
+        .set((
+            current_route_id.eq(Some(route_id)),
+            updated_at.eq(chrono::Utc::now().naive_utc()),
+        ))
+        .get_result::<Bus>(&mut conn)
+        .await
+        .map_err(|e| match e {
+            diesel::result::Error::NotFound => ApiError::NotFoundError("Bus not found".into()),
+            _ => ApiError::InternalError(e.to_string().into()),
+        })?;
+
+    // 4. Log activity
+    let mut log = ActivityLog::new(ActivityType::BusRouteChanged, user_id);
+    log.set_target_id(bus_id);
+    log.set_target_type("Bus".to_string());
+    log.set_details(serde_json::json!({
+        "route_id": route_id,
+        "action": "assign_route"
     }));
     if let Err(e) = app_state.logger.try_send(log) {
         tracing::warn!("Failed to queue activity log: {}", e);

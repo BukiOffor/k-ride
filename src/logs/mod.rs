@@ -17,5 +17,8 @@ pub mod dto;
 pub mod handlers;
 pub mod model;
 pub mod services;
+pub mod swagger;
 
+pub use dto::*;
 pub use model::*;
+

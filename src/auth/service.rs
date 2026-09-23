@@ -8,8 +8,8 @@ use super::*;
 pub async fn login(
     jar: CookieJar,
     pool: Arc<Pool>,
-    payload: LoginPayload,
-) -> Result<(CookieJar, crate::users::UserDto), ModuleError> {
+    payload: dto::LoginPayload,
+) -> Result<(CookieJar, dto::LoginResponseDto), ModuleError> {
     let mut conn = pool
         .get()
         .await
@@ -27,7 +27,7 @@ pub async fn login(
 
         let token = create_session_token(user.id, user.role.clone())?;
 
-        let cookie = Cookie::build(("access_token", token.access_token))
+        let cookie = Cookie::build(("access_token", token.access_token.clone()))
             .http_only(true)
             .secure(true)
             .path("/")
@@ -35,7 +35,7 @@ pub async fn login(
             .same_site(cookie::SameSite::None)
             .build();
 
-        let refresh_cookie = Cookie::build(("refresh_token", token.refresh_token))
+        let refresh_cookie = Cookie::build(("refresh_token", token.refresh_token.clone()))
             .path("/")
             .http_only(true)
             .secure(true)
@@ -50,8 +50,35 @@ pub async fn login(
             .execute(&mut conn)
             .await?;
 
-        Ok((updated_jar, crate::users::UserDto::from(user)))
+        let response = dto::LoginResponseDto {
+            user: crate::users::UserDto::from(user),
+            token: token.access_token,
+            refresh_token: token.refresh_token,
+            token_type: "Bearer".to_string(),
+        };
+
+        Ok((updated_jar, response))
     } else {
         Err(ModuleError::AuthError)
     }
+}
+
+pub fn logout(jar: CookieJar) -> CookieJar {
+    let cookie = Cookie::build(("access_token", ""))
+        .http_only(true)
+        .secure(true)
+        .path("/")
+        .max_age(cookie::time::Duration::seconds(0))
+        .same_site(cookie::SameSite::None)
+        .build();
+
+    let refresh_cookie = Cookie::build(("refresh_token", ""))
+        .path("/")
+        .http_only(true)
+        .secure(true)
+        .same_site(cookie::SameSite::None)
+        .max_age(cookie::time::Duration::seconds(0))
+        .build();
+
+    jar.add(cookie).add(refresh_cookie)
 }

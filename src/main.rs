@@ -1,7 +1,9 @@
 use axum::http::{Method, header::*};
 use diesel_migrations::{EmbeddedMigrations, embed_migrations};
 use k_rides::AppState;
+use k_rides::auth::swagger::AuthApiDoc;
 use k_rides::bus::swagger::BusApiDoc;
+use k_rides::logs::swagger::LogsApiDoc;
 use k_rides::users::swagger::UsersApiDoc;
 use std::sync::Arc;
 use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
@@ -67,12 +69,16 @@ async fn main() {
 
     let app = k_rides::users::handlers::routes(state.clone())
         .merge(k_rides::bus::handlers::routes(state.clone()))
+        .merge(k_rides::auth::handlers::routes(state.clone()))
+        .merge(k_rides::logs::handlers::routes(state.clone()))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .layer(cors);
 
     let mut openapi = UsersApiDoc::openapi();
     openapi.merge(BusApiDoc::openapi());
+    openapi.merge(AuthApiDoc::openapi());
+    openapi.merge(LogsApiDoc::openapi());
 
     let api = axum::Router::new()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi))

@@ -1,6 +1,16 @@
 use super::*;
 
-#[derive(Debug, Clone, Queryable, Identifiable, Serialize, Deserialize, Insertable, Selectable)]
+#[derive(
+    Debug,
+    Clone,
+    Queryable,
+    Identifiable,
+    Serialize,
+    Deserialize,
+    Insertable,
+    Selectable,
+    utoipa::ToSchema,
+)]
 #[diesel(primary_key(id))]
 #[diesel(table_name = crate::schema::activity_logs)]
 pub struct ActivityLog {
@@ -9,13 +19,16 @@ pub struct ActivityLog {
     pub activity_type: ActivityType,
     pub target_id: Option<Uuid>, // receiptent of the operation <topic id or subject id or user id>
     pub target_type: Option<String>, // change to enum ??
+    #[schema(value_type = Object)]
     pub details: Value,
     pub ip_address: Option<String>,
     pub user_agent: Option<String>,
     pub created_at: NaiveDateTime,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, AsExpression, FromSqlRow, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, AsExpression, FromSqlRow, PartialEq, Eq, utoipa::ToSchema,
+)]
 #[diesel(sql_type = diesel::sql_types::Text)]
 pub enum ActivityType {
     AccountCreated,

@@ -44,7 +44,16 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
         )
         .route(
             "/{bus_id}/route",
-            patch(change_bus_route).route_layer(middleware::from_fn_with_state(
+            patch(change_bus_route)
+                .post(assign_bus_to_route)
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::auth::middleware::admin_authorize,
+                )),
+        )
+        .route(
+            "/{bus_id}/assign-route",
+            post(assign_bus_to_route).route_layer(middleware::from_fn_with_state(
                 state.clone(),
                 crate::auth::middleware::admin_authorize,
             )),
@@ -535,5 +544,45 @@ pub async fn clear_bus_allocation(
 ) -> Result<Json<Message<Bus>>, ApiError> {
     let bus = services::buses::clear_bus_allocation(state, bus_id, claims.user_id).await?;
     let response = Message::context("Bus allocation cleared successfully.", bus);
+    Ok(Json(response))
+}
+
+/// Assign bus to a route (Admin only)
+///
+/// Assigns a bus to a specific active scheduled route.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
+///
+/// ### Behavior
+/// - Validates that the bus exists and is not under maintenance.
+/// - Validates that the referenced route exists and is not completed.
+/// - Attaches the route UUID to the bus record as `current_route_id`.
+#[utoipa::path(
+    post,
+    path = "/buses/{bus_id}/assign-route",
+    params(
+        ("bus_id" = Uuid, Path, description = "Unique UUID of the bus")
+    ),
+    request_body = AssignBusToRouteDto,
+    responses(
+        (status = 200, description = "Bus assigned to route successfully", body = Message<Bus>),
+        (status = 400, description = "Bad request - Route does not exist, route is completed, or bus is under maintenance"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
+        (status = 404, description = "Bus or route not found")
+    ),
+    tag = "Buses"
+)]
+pub async fn assign_bus_to_route(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Path(bus_id): Path<Uuid>,
+    Json(payload): Json<AssignBusToRouteDto>,
+) -> Result<Json<Message<Bus>>, ApiError> {
+    let bus =
+        services::buses::assign_bus_to_route(state, bus_id, payload.route_id, claims.user_id)
+            .await?;
+    let response = Message::context("Bus assigned to route successfully.", bus);
     Ok(Json(response))
 }

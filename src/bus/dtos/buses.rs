@@ -60,6 +60,11 @@ pub struct ChangeBusRouteDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct AssignBusToRouteDto {
+    pub route_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ChangeBusStatusDto {
     pub status: BusStatus,
 }
