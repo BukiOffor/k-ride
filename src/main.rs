@@ -56,7 +56,10 @@ async fn main() {
             ACCESS_CONTROL_ALLOW_ORIGIN,
         ])
         .allow_credentials(true)
-        .allow_origin(["http://localhost:3000".parse::<HeaderValue>().unwrap()]);
+        .allow_origin([
+            "http://localhost:3000".parse::<HeaderValue>().unwrap(),
+            "http://localhost:5173".parse::<HeaderValue>().unwrap(),
+            ]);
 
     k_rides::config::start_log_workers(state.clone(), logger_receiver, 2).await;
 
