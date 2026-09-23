@@ -1,5 +1,5 @@
-use crate::schema::activity_logs;
 use super::*;
+use crate::schema::activity_logs;
 use diesel_async::RunQueryDsl;
 
 pub async fn emit_log(

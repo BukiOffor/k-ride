@@ -1,8 +1,8 @@
-use crate::logs::{ActivityLog, ActivityType};
 use super::*;
-use diesel::prelude::*;
-use diesel::PgTextExpressionMethods;
+use crate::logs::{ActivityLog, ActivityType};
 use diesel::OptionalExtension;
+use diesel::PgTextExpressionMethods;
+use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
@@ -67,12 +67,16 @@ pub async fn create_booking(
 
     // 4. Verify bus is assigned to this route
     if bus.current_route_id != Some(payload.route_id) {
-        return Err(ApiError::Error("Bus is not currently assigned to the specified route".into()));
+        return Err(ApiError::Error(
+            "Bus is not currently assigned to the specified route".into(),
+        ));
     }
 
     // 5. Verify bus availability
     if bus.status == BusStatus::Maintenance {
-        return Err(ApiError::Error("Bus is currently under maintenance and cannot be booked".into()));
+        return Err(ApiError::Error(
+            "Bus is currently under maintenance and cannot be booked".into(),
+        ));
     }
 
     // 6. Verify passenger capacity
@@ -96,10 +100,14 @@ pub async fn create_booking(
     let assigned_seat: i32 = match payload.seat_number {
         Some(s) => {
             if s < 1 || s > bus.capacity {
-                return Err(ApiError::Error(format!("Seat number must be between 1 and {}", bus.capacity).into()));
+                return Err(ApiError::Error(
+                    format!("Seat number must be between 1 and {}", bus.capacity).into(),
+                ));
             }
             if booked_set.contains(&s) {
-                return Err(ApiError::Error(format!("Seat {} on this bus is already booked", s).into()));
+                return Err(ApiError::Error(
+                    format!("Seat {} on this bus is already booked", s).into(),
+                ));
             }
             s
         }
@@ -195,18 +203,21 @@ pub async fn cancel_booking(
     }
 
     if booking.status == BookingStatus::Boarded {
-        return Err(ApiError::Error("Cannot cancel a booking that has already boarded".into()));
+        return Err(ApiError::Error(
+            "Cannot cancel a booking that has already boarded".into(),
+        ));
     }
 
     // Update status to Cancelled
-    let updated_booking = diesel::update(bookings_dsl::bookings.filter(bookings_dsl::id.eq(booking_id)))
-        .set((
-            bookings_dsl::status.eq(BookingStatus::Cancelled),
-            bookings_dsl::updated_at.eq(chrono::Utc::now().naive_utc()),
-        ))
-        .get_result::<Booking>(&mut conn)
-        .await
-        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+    let updated_booking =
+        diesel::update(bookings_dsl::bookings.filter(bookings_dsl::id.eq(booking_id)))
+            .set((
+                bookings_dsl::status.eq(BookingStatus::Cancelled),
+                bookings_dsl::updated_at.eq(chrono::Utc::now().naive_utc()),
+            ))
+            .get_result::<Booking>(&mut conn)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
 
     // Decrement current_passenger_count on the bus
     let bus = buses_dsl::buses
@@ -264,17 +275,20 @@ pub async fn board_passenger(
         })?;
 
     if booking.status == BookingStatus::Cancelled || booking.status == BookingStatus::Revoked {
-        return Err(ApiError::Error("Cannot board a cancelled or revoked booking".into()));
+        return Err(ApiError::Error(
+            "Cannot board a cancelled or revoked booking".into(),
+        ));
     }
 
-    let updated_booking = diesel::update(bookings_dsl::bookings.filter(bookings_dsl::id.eq(booking_id)))
-        .set((
-            bookings_dsl::status.eq(BookingStatus::Boarded),
-            bookings_dsl::updated_at.eq(chrono::Utc::now().naive_utc()),
-        ))
-        .get_result::<Booking>(&mut conn)
-        .await
-        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+    let updated_booking =
+        diesel::update(bookings_dsl::bookings.filter(bookings_dsl::id.eq(booking_id)))
+            .set((
+                bookings_dsl::status.eq(BookingStatus::Boarded),
+                bookings_dsl::updated_at.eq(chrono::Utc::now().naive_utc()),
+            ))
+            .get_result::<Booking>(&mut conn)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
 
     let mut log = ActivityLog::new(ActivityType::BookingBoarded, admin_user_id);
     log.set_target_id(booking_id);
@@ -300,17 +314,20 @@ pub async fn update_payment_status(
         .await
         .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
 
-    let updated_booking = diesel::update(bookings_dsl::bookings.filter(bookings_dsl::id.eq(booking_id)))
-        .set((
-            bookings_dsl::payment_status.eq(new_payment_status),
-            bookings_dsl::updated_at.eq(chrono::Utc::now().naive_utc()),
-        ))
-        .get_result::<Booking>(&mut conn)
-        .await
-        .map_err(|e| match e {
-            diesel::result::Error::NotFound => ApiError::NotFoundError("Booking not found".into()),
-            _ => ApiError::InternalError(e.to_string().into()),
-        })?;
+    let updated_booking =
+        diesel::update(bookings_dsl::bookings.filter(bookings_dsl::id.eq(booking_id)))
+            .set((
+                bookings_dsl::payment_status.eq(new_payment_status),
+                bookings_dsl::updated_at.eq(chrono::Utc::now().naive_utc()),
+            ))
+            .get_result::<Booking>(&mut conn)
+            .await
+            .map_err(|e| match e {
+                diesel::result::Error::NotFound => {
+                    ApiError::NotFoundError("Booking not found".into())
+                }
+                _ => ApiError::InternalError(e.to_string().into()),
+            })?;
 
     let mut log = ActivityLog::new(ActivityType::BookingPaymentUpdated, admin_user_id);
     log.set_target_id(booking_id);

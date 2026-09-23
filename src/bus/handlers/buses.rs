@@ -256,7 +256,8 @@ pub async fn change_bus_state(
     Path(bus_id): Path<Uuid>,
     Json(payload): Json<ChangeBusStateDto>,
 ) -> Result<Json<Message<Bus>>, ApiError> {
-    let bus = services::buses::change_bus_state(state, bus_id, payload.state, claims.user_id).await?;
+    let bus =
+        services::buses::change_bus_state(state, bus_id, payload.state, claims.user_id).await?;
     let response = Message::context("Bus state updated successfully.", bus);
     Ok(Json(response))
 }
@@ -283,7 +284,8 @@ pub async fn change_bus_route(
     Path(bus_id): Path<Uuid>,
     Json(payload): Json<ChangeBusRouteDto>,
 ) -> Result<Json<Message<Bus>>, ApiError> {
-    let bus = services::buses::change_bus_route(state, bus_id, payload.route_id, claims.user_id).await?;
+    let bus =
+        services::buses::change_bus_route(state, bus_id, payload.route_id, claims.user_id).await?;
     let response = Message::context("Bus route updated successfully.", bus);
     Ok(Json(response))
 }
@@ -310,7 +312,8 @@ pub async fn change_bus_status(
     Path(bus_id): Path<Uuid>,
     Json(payload): Json<ChangeBusStatusDto>,
 ) -> Result<Json<Message<Bus>>, ApiError> {
-    let bus = services::buses::change_bus_status(state, bus_id, payload.status, claims.user_id).await?;
+    let bus =
+        services::buses::change_bus_status(state, bus_id, payload.status, claims.user_id).await?;
     let response = Message::context("Bus status updated successfully.", bus);
     Ok(Json(response))
 }
@@ -363,7 +366,13 @@ pub async fn change_bus_allocation(
     Path(bus_id): Path<Uuid>,
     Json(payload): Json<ChangeBusAllocationDto>,
 ) -> Result<Json<Message<Bus>>, ApiError> {
-    let bus = services::buses::change_bus_allocation(state, bus_id, payload.passenger_count, claims.user_id).await?;
+    let bus = services::buses::change_bus_allocation(
+        state,
+        bus_id,
+        payload.passenger_count,
+        claims.user_id,
+    )
+    .await?;
     let response = Message::context("Bus allocation updated successfully.", bus);
     Ok(Json(response))
 }
@@ -391,7 +400,8 @@ pub async fn change_bus_capacity(
     Path(bus_id): Path<Uuid>,
     Json(payload): Json<ChangeBusCapacityDto>,
 ) -> Result<Json<Message<Bus>>, ApiError> {
-    let bus = services::buses::change_bus_capacity(state, bus_id, payload.capacity, claims.user_id).await?;
+    let bus = services::buses::change_bus_capacity(state, bus_id, payload.capacity, claims.user_id)
+        .await?;
     let response = Message::context("Bus capacity updated successfully.", bus);
     Ok(Json(response))
 }

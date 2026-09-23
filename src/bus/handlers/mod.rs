@@ -1,7 +1,7 @@
+pub mod bookings;
 pub mod buses;
 pub mod points;
 pub mod routes;
-pub mod bookings;
 
 pub fn routes(state: Arc<AppState>) -> Router {
     Router::new()

@@ -1,6 +1,5 @@
 use super::*;
 
-
 #[derive(Debug, Clone, Queryable, Identifiable, Serialize, Deserialize, Insertable, Selectable)]
 #[diesel(primary_key(id))]
 #[diesel(table_name = crate::schema::activity_logs)]
@@ -15,7 +14,6 @@ pub struct ActivityLog {
     pub user_agent: Option<String>,
     pub created_at: NaiveDateTime,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, AsExpression, FromSqlRow, PartialEq, Eq)]
 #[diesel(sql_type = diesel::sql_types::Text)]

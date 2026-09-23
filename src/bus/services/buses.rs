@@ -1,9 +1,9 @@
-use crate::traits::Validate;
 use crate::logs::{ActivityLog, ActivityType};
+use crate::traits::Validate;
 
 use super::*;
-use diesel::prelude::*;
 use diesel::PgTextExpressionMethods;
+use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use std::sync::Arc;
 
@@ -14,7 +14,9 @@ pub async fn create_bus(
 ) -> Result<Bus, ApiError> {
     use crate::schema::buses::dsl::*;
 
-    payload.validate().map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+    payload
+        .validate()
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
 
     let mut conn = app_state
         .pool
@@ -93,10 +95,7 @@ pub async fn get_buses(
     Ok(result)
 }
 
-pub async fn get_bus_by_id(
-    app_state: Arc<AppState>,
-    bus_id: Uuid,
-) -> Result<Bus, ApiError> {
+pub async fn get_bus_by_id(app_state: Arc<AppState>, bus_id: Uuid) -> Result<Bus, ApiError> {
     use crate::schema::buses::dsl::*;
 
     let mut conn = app_state
@@ -132,10 +131,7 @@ pub async fn update_bus(
         .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
 
     let updated_bus = diesel::update(buses.filter(id.eq(bus_id)))
-        .set((
-            &payload,
-            updated_at.eq(chrono::Utc::now().naive_utc()),
-        ))
+        .set((&payload, updated_at.eq(chrono::Utc::now().naive_utc())))
         .get_result::<Bus>(&mut conn)
         .await
         .map_err(|e| match e {

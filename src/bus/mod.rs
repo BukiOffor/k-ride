@@ -10,7 +10,7 @@ pub use models::{bookings::*, buses::*, points::*, routes::*};
 // Axum re-exports for handler convenience
 pub use axum::{
     extract::*,
-    routing::{delete, get, patch, post, put, Router},
+    routing::{Router, delete, get, patch, post, put},
 };
 
 // Error type used by handlers/services

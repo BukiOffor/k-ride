@@ -68,7 +68,6 @@ impl ToSql<Text, diesel::pg::Pg> for BusStatus {
     }
 }
 
-
 #[derive(
     Debug,
     Clone,
@@ -107,7 +106,7 @@ impl ToSql<Text, diesel::pg::Pg> for BusState {
             Self::Transit => "Transit",
             Self::Stationary => "Stationary",
             Self::Boarding => "Boarding",
-            Self::Arrived => "Arrived"
+            Self::Arrived => "Arrived",
         };
         std::io::Write::write(&mut *out, s.as_bytes())?;
         Ok(serialize::IsNull::No)

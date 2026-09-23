@@ -1,16 +1,15 @@
 pub mod auth;
+pub mod bus;
 pub mod config;
 pub mod errors;
 pub mod helpers;
+pub mod logs;
 pub mod macros;
 pub mod mailer;
 pub mod schema;
 pub mod traits;
-pub mod users;
-pub mod bus;
 pub mod types;
-pub mod logs;
-
+pub mod users;
 
 // ==================================================================================================================================================================
 // ==================================================================================================================================================================
@@ -19,12 +18,15 @@ pub mod logs;
 // ==================================================================================================================================================================
 pub use self::errors::ModuleError;
 pub use axum::Router;
+use axum::middleware;
+pub use axum::{
+    extract::*,
+    routing::{delete, get, patch, post, put},
+};
 pub use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-pub use uuid::Uuid;
-use axum::middleware;
 use tower::ServiceBuilder;
-pub use axum::{extract::*, routing::{delete, get, patch, post, put}};
+pub use uuid::Uuid;
 // ==================================================================================================================================================================
 // ==================================================================================================================================================================
 // =============================================================== Database and App State ===========================================================================
@@ -34,8 +36,8 @@ pub use chrono::NaiveDateTime;
 pub use diesel::backend::Backend;
 pub use diesel::deserialize::{self, FromSql, FromSqlRow};
 pub use diesel::expression::AsExpression;
-pub use diesel::prelude::*;
 pub use diesel::pg::Pg;
+pub use diesel::prelude::*;
 pub use diesel::serialize::{self, Output, ToSql};
 pub use diesel::sql_types::Text;
 pub use diesel_async::AsyncPgConnection;
@@ -51,7 +53,6 @@ pub type Logger = async_channel::Sender<logs::ActivityLog>;
 pub struct AppState {
     pub pool: Arc<Pool>,
     pub logger: Logger,
-
 }
 // ==================================================================================================================================================================
 // ==================================================================================================================================================================
@@ -69,6 +70,9 @@ pub struct Message<T> {
 
 impl<T> Message<T> {
     pub fn context(message: &str, data: T) -> Self {
-        Self { message: message.to_string(), data }
+        Self {
+            message: message.to_string(),
+            data,
+        }
     }
 }

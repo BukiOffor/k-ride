@@ -1,6 +1,6 @@
-use crate::types::Pagination;
 use super::super::models::bookings::{BookingStatus, PaymentStatus};
 use super::*;
+use crate::types::Pagination;
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateBookingDto {

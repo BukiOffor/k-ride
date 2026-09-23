@@ -1,7 +1,7 @@
 use super::*;
+use crate::Message;
 use crate::auth::jwt::Claims;
 use crate::users::RoleType;
-use crate::Message;
 
 pub fn routes(state: Arc<AppState>) -> Router {
     let routes = module_routes(state.clone());
@@ -67,7 +67,8 @@ pub async fn create_booking(
     Json(payload): Json<CreateBookingDto>,
 ) -> Result<Json<Message<Booking>>, ApiError> {
     let is_admin = matches!(claims.role, RoleType::Admin | RoleType::Root);
-    let booking = services::bookings::create_booking(state, payload, claims.user_id, is_admin).await?;
+    let booking =
+        services::bookings::create_booking(state, payload, claims.user_id, is_admin).await?;
     let response = Message::context("Booking created successfully.", booking);
     Ok(Json(response))
 }
@@ -93,7 +94,8 @@ pub async fn cancel_booking(
     Path(booking_id): Path<Uuid>,
 ) -> Result<Json<Message<Booking>>, ApiError> {
     let is_admin = matches!(claims.role, RoleType::Admin | RoleType::Root);
-    let booking = services::bookings::cancel_booking(state, booking_id, claims.user_id, is_admin).await?;
+    let booking =
+        services::bookings::cancel_booking(state, booking_id, claims.user_id, is_admin).await?;
     let response = Message::context("Booking cancelled successfully.", booking);
     Ok(Json(response))
 }
@@ -165,7 +167,8 @@ pub async fn get_booking_by_id(
     Path(booking_id): Path<Uuid>,
 ) -> Result<Json<Message<Booking>>, ApiError> {
     let is_admin = matches!(claims.role, RoleType::Admin | RoleType::Root);
-    let booking = services::bookings::get_booking_by_id(state, booking_id, claims.user_id, is_admin).await?;
+    let booking =
+        services::bookings::get_booking_by_id(state, booking_id, claims.user_id, is_admin).await?;
     let response = Message::context("Booking retrieved successfully.", booking);
     Ok(Json(response))
 }
@@ -240,7 +243,13 @@ pub async fn update_payment_status(
     Path(booking_id): Path<Uuid>,
     Json(payload): Json<UpdatePaymentStatusDto>,
 ) -> Result<Json<Message<Booking>>, ApiError> {
-    let booking = services::bookings::update_payment_status(state, booking_id, payload.payment_status, claims.user_id).await?;
+    let booking = services::bookings::update_payment_status(
+        state,
+        booking_id,
+        payload.payment_status,
+        claims.user_id,
+    )
+    .await?;
     let response = Message::context("Payment status updated successfully.", booking);
     Ok(Json(response))
 }

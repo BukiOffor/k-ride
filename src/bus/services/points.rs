@@ -1,9 +1,9 @@
-use crate::traits::Validate;
 use crate::logs::{ActivityLog, ActivityType};
+use crate::traits::Validate;
 
 use super::*;
-use diesel::prelude::*;
 use diesel::PgTextExpressionMethods;
+use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use std::sync::Arc;
 
@@ -14,7 +14,9 @@ pub async fn create_point(
 ) -> Result<Point, ApiError> {
     use crate::schema::points::dsl::*;
 
-    payload.validate().map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+    payload
+        .validate()
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
 
     let mut conn = state
         .pool
@@ -108,10 +110,7 @@ pub async fn update_point(
         .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
 
     let updated_point = diesel::update(points.filter(id.eq(point_id)))
-        .set((
-            &payload,
-            updated_at.eq(chrono::Utc::now().naive_utc()),
-        ))
+        .set((&payload, updated_at.eq(chrono::Utc::now().naive_utc())))
         .get_result::<Point>(&mut conn)
         .await
         .map_err(|e| match e {
@@ -163,10 +162,7 @@ pub async fn delete_point(
     Ok(deleted_point)
 }
 
-pub async fn get_point_by_id(
-    state: Arc<AppState>,
-    point_id: Uuid,
-) -> Result<Point, ApiError> {
+pub async fn get_point_by_id(state: Arc<AppState>, point_id: Uuid) -> Result<Point, ApiError> {
     use crate::schema::points::dsl::*;
 
     let mut conn = state

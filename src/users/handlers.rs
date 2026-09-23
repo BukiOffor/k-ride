@@ -2,8 +2,8 @@ use axum::http::HeaderMap;
 use axum::middleware;
 use tower::ServiceBuilder;
 
-use super::*;
 use super::services;
+use super::*;
 
 use crate::auth::jwt::Claims;
 use crate::logs::{ActivityLog, ActivityType};
@@ -18,8 +18,14 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/admin", post(create_user))
         .route("/{user_id}/role", patch(assign_role_to_user))
-        .route("/{user_id}/activate", patch(activate_user).post(activate_user))
-        .route("/{user_id}/deactivate", patch(deactivate_user).post(deactivate_user))
+        .route(
+            "/{user_id}/activate",
+            patch(activate_user).post(activate_user),
+        )
+        .route(
+            "/{user_id}/deactivate",
+            patch(deactivate_user).post(deactivate_user),
+        )
         .route("/", get(get_users))
         .layer(ServiceBuilder::new().layer(middleware::from_fn_with_state(
             state.clone(),
@@ -48,7 +54,10 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
 }
 
 fn log_activity(state: &Arc<AppState>, mut log: ActivityLog, headers: &HeaderMap) {
-    if let Some(ua) = headers.get(axum::http::header::USER_AGENT).and_then(|v| v.to_str().ok()) {
+    if let Some(ua) = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+    {
         log.set_user_agent(ua.to_string());
     }
     if let Some(ip) = headers
@@ -116,7 +125,8 @@ pub async fn assign_role_to_user(
     Path(user_id): Path<Uuid>,
     Json(payload): Json<AssignRoleDto>,
 ) -> Result<Json<Message<UserDto>>, ApiError> {
-    let response = services::assign_role_to_user(state.clone(), user_id, payload.role.clone()).await?;
+    let response =
+        services::assign_role_to_user(state.clone(), user_id, payload.role.clone()).await?;
 
     let mut log = ActivityLog::new(ActivityType::UserUpdated, claims.user_id);
     log.set_target_id(user_id);
@@ -159,7 +169,7 @@ pub async fn register_user(
     Ok(Json(response))
 }
 
-/// Get all users with search by username, email and names and filter by roles and is_active. 
+/// Get all users with search by username, email and names and filter by roles and is_active.
 /// If pagination is empty, gets all users
 #[utoipa::path(
     get,
@@ -207,7 +217,6 @@ pub async fn get_user_by_id(
     Ok(Json(response))
 }
 
-
 /// Update a user
 #[utoipa::path(
     patch,
@@ -231,7 +240,8 @@ pub async fn update_user(
     Path(user_id): Path<Uuid>,
     Json(payload): Json<UpdateUserDto>,
 ) -> Result<Json<Message<UserDto>>, ApiError> {
-    if claims.role != RoleType::Admin && claims.role != RoleType::Root && claims.user_id != user_id {
+    if claims.role != RoleType::Admin && claims.role != RoleType::Root && claims.user_id != user_id
+    {
         return Err(ApiError::PermissionDenied);
     }
     let user = services::update_user(state.clone(), user_id, payload.clone()).await?;

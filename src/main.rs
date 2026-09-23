@@ -1,18 +1,18 @@
 use axum::http::{Method, header::*};
 use diesel_migrations::{EmbeddedMigrations, embed_migrations};
 use k_rides::AppState;
+use k_rides::bus::swagger::BusApiDoc;
+use k_rides::users::swagger::UsersApiDoc;
 use std::sync::Arc;
 use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
-use k_rides::users::swagger::UsersApiDoc;
-use k_rides::bus::swagger::BusApiDoc;
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
 
 #[tokio::main]
 async fn main() {
-     tracing_subscriber::fmt()
+    tracing_subscriber::fmt()
         .pretty()
         .with_level(true)
         .with_env_filter("debug,tokio_postgres::query=off,tokio_postgres::prepare=off")
@@ -30,12 +30,16 @@ async fn main() {
 
     let (logger, logger_receiver) = async_channel::bounded::<k_rides::logs::ActivityLog>(10000);
 
-
     let state: Arc<AppState> = AppState {
         pool: pool.clone(),
         logger: logger.clone(),
     }
     .into();
+
+    // Seed default root user if no root user exists
+    if let Err(e) = k_rides::users::services::seed_root_user(state.clone()).await {
+        tracing::error!("Failed to seed root user: {}", e);
+    }
 
     let cors = CorsLayer::new()
         .allow_methods([
@@ -52,9 +56,7 @@ async fn main() {
             ACCESS_CONTROL_ALLOW_ORIGIN,
         ])
         .allow_credentials(true)
-        .allow_origin([
-            "http://localhost:3000".parse::<HeaderValue>().unwrap(),
-        ]);
+        .allow_origin(["http://localhost:3000".parse::<HeaderValue>().unwrap()]);
 
     k_rides::config::start_log_workers(state.clone(), logger_receiver, 2).await;
 
@@ -70,8 +72,7 @@ async fn main() {
     openapi.merge(BusApiDoc::openapi());
 
     let api = axum::Router::new()
-        .merge(SwaggerUi::new("/swagger-ui")
-        .url("/api-docs/openapi.json", openapi))
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi))
         .nest("/api/v1", app);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:9990").await.unwrap();

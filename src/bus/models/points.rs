@@ -25,14 +25,7 @@ pub struct Point {
 }
 
 #[derive(
-    Debug,
-    Clone,
-    Serialize,
-    Deserialize,
-    AsExpression,
-    FromSqlRow,
-    PartialEq,
-    utoipa::ToSchema,
+    Debug, Clone, Serialize, Deserialize, AsExpression, FromSqlRow, PartialEq, utoipa::ToSchema,
 )]
 #[diesel(sql_type = diesel::sql_types::Jsonb)]
 pub struct GeoPoint {
@@ -46,11 +39,7 @@ impl FromSql<diesel::sql_types::Jsonb, diesel::pg::Pg> for GeoPoint {
         if bytes.is_empty() {
             return Err("Empty jsonb value".into());
         }
-        let json_bytes = if bytes[0] == 1 {
-            &bytes[1..]
-        } else {
-            bytes
-        };
+        let json_bytes = if bytes[0] == 1 { &bytes[1..] } else { bytes };
         serde_json::from_slice(json_bytes).map_err(Into::into)
     }
 }

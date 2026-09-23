@@ -1,8 +1,8 @@
 use string_validator::Validate;
 
-use crate::types::Pagination;
 use super::super::models::points::{GeoPoint, Point};
 use super::*;
+use crate::types::Pagination;
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema, Validate)]
 pub struct CreatePointDto {

@@ -1,9 +1,9 @@
-use crate::traits::Validate;
-use crate::logs::{ActivityLog, ActivityType};
-use crate::bus::models::routes::Route;
 use super::*;
-use diesel::prelude::*;
+use crate::bus::models::routes::Route;
+use crate::logs::{ActivityLog, ActivityType};
+use crate::traits::Validate;
 use diesel::PgTextExpressionMethods;
+use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use std::sync::Arc;
 
@@ -14,7 +14,9 @@ pub async fn create_route(
 ) -> Result<Vec<Route>, ApiError> {
     use crate::schema::routes::dsl::*;
 
-    payload.validate().map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+    payload
+        .validate()
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
 
     if payload.fare < 0.0 {
         return Err(ApiError::Error("Fare cannot be negative".into()));
@@ -23,7 +25,9 @@ pub async fn create_route(
         return Err(ApiError::Error("Distance cannot be negative".into()));
     }
     if payload.start_point == payload.end_point {
-        return Err(ApiError::Error("Start point and end point cannot be the same".into()));
+        return Err(ApiError::Error(
+            "Start point and end point cannot be the same".into(),
+        ));
     }
 
     let mut conn = state
@@ -33,7 +37,8 @@ pub async fn create_route(
         .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
 
     let now = chrono::Utc::now().naive_utc();
-    let is_round_trip = payload.is_round_trip.unwrap_or(false) || payload.ride_type == RideType::RoundTrip;
+    let is_round_trip =
+        payload.is_round_trip.unwrap_or(false) || payload.ride_type == RideType::RoundTrip;
 
     let mut routes_to_insert = Vec::new();
 
@@ -66,8 +71,12 @@ pub async fn create_route(
     if is_round_trip {
         // Reverse stops for return route
         let reversed_stops: Vec<Uuid> = payload.stops.iter().rev().cloned().collect();
-        let return_departure_time = payload.return_departure_time.unwrap_or(payload.departure_time);
-        let return_departure_date = payload.return_departure_date.unwrap_or(payload.departure_date);
+        let return_departure_time = payload
+            .return_departure_time
+            .unwrap_or(payload.departure_time);
+        let return_departure_date = payload
+            .return_departure_date
+            .unwrap_or(payload.departure_date);
 
         let return_route = Route {
             id: Uuid::now_v7(),
@@ -130,10 +139,7 @@ pub async fn get_routes(
             let words: Vec<&str> = s.split_whitespace().collect();
             for word in words {
                 let pattern = format!("%{}%", word);
-                query = query.filter(
-                    name.ilike(pattern.clone())
-                        .or(description.ilike(pattern)),
-                );
+                query = query.filter(name.ilike(pattern.clone()).or(description.ilike(pattern)));
             }
         }
     }
@@ -158,7 +164,11 @@ pub async fn get_routes(
         query = query.filter(is_completed.eq(comp));
     }
 
-    query = query.order((departure_date.asc(), departure_time.asc(), created_at.desc()));
+    query = query.order((
+        departure_date.asc(),
+        departure_time.asc(),
+        created_at.desc(),
+    ));
 
     if let Some(pagination) = params.pagination {
         let size = pagination.size.max(1) as i64;
@@ -175,10 +185,7 @@ pub async fn get_routes(
     Ok(result)
 }
 
-pub async fn get_route_by_id(
-    state: Arc<AppState>,
-    route_id: Uuid,
-) -> Result<Route, ApiError> {
+pub async fn get_route_by_id(state: Arc<AppState>, route_id: Uuid) -> Result<Route, ApiError> {
     use crate::schema::routes::dsl::*;
 
     let mut conn = state
@@ -214,10 +221,7 @@ pub async fn update_route(
         .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
 
     let updated_route = diesel::update(routes.filter(id.eq(route_id)))
-        .set((
-            &payload,
-            updated_at.eq(chrono::Utc::now().naive_utc()),
-        ))
+        .set((&payload, updated_at.eq(chrono::Utc::now().naive_utc())))
         .get_result::<Route>(&mut conn)
         .await
         .map_err(|e| match e {

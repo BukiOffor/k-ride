@@ -1,6 +1,6 @@
-use crate::types::Pagination;
 use super::super::models::buses::{Bus, BusState, BusStatus};
 use super::*;
+use crate::types::Pagination;
 use string_validator::Validate;
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema, Validate)]

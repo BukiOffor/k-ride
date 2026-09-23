@@ -41,12 +41,14 @@ pub async fn coordinator_authorize(
     req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    if !matches!(role, RoleType::RouteCoordinator | RoleType::Root | RoleType::Admin) {
+    if !matches!(
+        role,
+        RoleType::RouteCoordinator | RoleType::Root | RoleType::Admin
+    ) {
         return Err(StatusCode::FORBIDDEN);
     }
     Ok(next.run(req).await)
 }
-
 
 pub async fn connection_info_middleware(
     user_agent: Option<axum_extra::TypedHeader<axum_extra::headers::UserAgent>>,

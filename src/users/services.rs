@@ -91,8 +91,10 @@ pub async fn assign_role_to_user(
     Ok(UserDto::from(updated_user))
 }
 
-
-pub async fn register_user(state: Arc<AppState>, payload: CreateUserDto) -> Result<Message<UserDto>, ApiError> {
+pub async fn register_user(
+    state: Arc<AppState>,
+    payload: CreateUserDto,
+) -> Result<Message<UserDto>, ApiError> {
     let mut conn = state
         .pool
         .get()
@@ -189,10 +191,7 @@ pub async fn get_users(
     Ok(result.into_iter().map(UserDto::from).collect())
 }
 
-pub async fn get_user_by_id(
-    state: Arc<AppState>,
-    user_id: Uuid,
-) -> Result<UserDto, ApiError> {
+pub async fn get_user_by_id(state: Arc<AppState>, user_id: Uuid) -> Result<UserDto, ApiError> {
     use crate::schema::users::dsl::*;
 
     let mut conn = state
@@ -227,10 +226,7 @@ pub async fn update_user(
         .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
 
     let updated_user = diesel::update(users.filter(id.eq(user_id)))
-        .set((
-            &payload,
-            updated_at.eq(chrono::Utc::now().naive_utc()),
-        ))
+        .set((&payload, updated_at.eq(chrono::Utc::now().naive_utc())))
         .get_result::<User>(&mut conn)
         .await
         .map_err(|e| match e {
@@ -241,10 +237,7 @@ pub async fn update_user(
     Ok(UserDto::from(updated_user))
 }
 
-pub async fn activate_user(
-    state: Arc<AppState>,
-    user_id: Uuid,
-) -> Result<UserDto, ApiError> {
+pub async fn activate_user(state: Arc<AppState>, user_id: Uuid) -> Result<UserDto, ApiError> {
     use crate::schema::users::dsl::*;
 
     let mut conn = state
@@ -268,10 +261,7 @@ pub async fn activate_user(
     Ok(UserDto::from(updated_user))
 }
 
-pub async fn deactivate_user(
-    state: Arc<AppState>,
-    user_id: Uuid,
-) -> Result<UserDto, ApiError> {
+pub async fn deactivate_user(state: Arc<AppState>, user_id: Uuid) -> Result<UserDto, ApiError> {
     use crate::schema::users::dsl::*;
 
     let mut conn = state
@@ -295,10 +285,7 @@ pub async fn deactivate_user(
     Ok(UserDto::from(updated_user))
 }
 
-pub async fn delete_user(
-    state: Arc<AppState>,
-    user_id: Uuid,
-) -> Result<UserDto, ApiError> {
+pub async fn delete_user(state: Arc<AppState>, user_id: Uuid) -> Result<UserDto, ApiError> {
     use crate::schema::users::dsl::*;
 
     let mut conn = state
@@ -316,4 +303,74 @@ pub async fn delete_user(
         })?;
 
     Ok(UserDto::from(deleted_user))
+}
+
+pub async fn seed_root_user(state: Arc<AppState>) -> Result<(), ApiError> {
+    use crate::schema::users::dsl::*;
+    use diesel::OptionalExtension;
+
+    let mut conn = state
+        .pool
+        .get()
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    // Check if any root user already exists
+    let root_user_exists = users
+        .filter(role.eq(RoleType::Root))
+        .first::<User>(&mut conn)
+        .await
+        .optional()
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    if root_user_exists.is_some() {
+        tracing::info!("Root user already exists. Skipping root user seeding.");
+        return Ok(());
+    }
+
+    // Read root user credentials from environment or fall back to defaults
+    let root_email = std::env::var("ROOT_EMAIL").unwrap_or_else(|_| "root@freebus.com".to_string());
+    let root_username = std::env::var("ROOT_USERNAME").unwrap_or_else(|_| "root".to_string());
+    let root_password = std::env::var("ROOT_PASSWORD").unwrap_or_else(|_| "iamroot".to_string());
+    let root_phone = std::env::var("ROOT_PHONE").unwrap_or_else(|_| "+2348000000000".to_string());
+    let root_first_name = std::env::var("ROOT_FIRST_NAME").unwrap_or_else(|_| "System".to_string());
+    let root_last_name = std::env::var("ROOT_LAST_NAME").unwrap_or_else(|_| "Root".to_string());
+
+    let hashed_password = crate::helpers::password_hasher(&root_password)
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    let now = chrono::Utc::now().naive_utc();
+    let new_root = User {
+        id: Uuid::now_v7(),
+        first_name: root_first_name,
+        last_name: root_last_name,
+        email: root_email.clone(),
+        username: root_username.clone(),
+        phone: root_phone,
+        address: "System Headquarters".to_string(),
+        country: "Nigeria".to_string(),
+        identity_type: Some("System".to_string()),
+        identity_number: Some("ROOT-001".to_string()),
+        password_hash: hashed_password,
+        is_identity_verified: true,
+        role: RoleType::Root,
+        is_active: true,
+        created_at: now,
+        updated_at: now,
+        last_seen: now,
+    };
+
+    diesel::insert_into(users)
+        .values(&new_root)
+        .execute(&mut conn)
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    tracing::info!(
+        "Seeded default Root user: username='{}', email='{}'",
+        root_username,
+        root_email
+    );
+
+    Ok(())
 }

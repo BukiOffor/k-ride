@@ -13,9 +13,9 @@ use serde_json::Value;
 use std::io::Write;
 use uuid::Uuid;
 
-pub mod model;
-pub mod services;
 pub mod dto;
 pub mod handlers;
+pub mod model;
+pub mod services;
 
 pub use model::*;

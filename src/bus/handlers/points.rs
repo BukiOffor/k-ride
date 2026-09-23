@@ -107,7 +107,8 @@ pub async fn update_points(
         landmark: payload.landmark.clone(),
         description: payload.description.clone(),
     };
-    let point = services::points::update_point(state, point_id, update_payload, claims.user_id).await?;
+    let point =
+        services::points::update_point(state, point_id, update_payload, claims.user_id).await?;
     let response = Message::context("Point updated successfully.", point);
     Ok(Json(response))
 }

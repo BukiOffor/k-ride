@@ -1,7 +1,7 @@
 use super::*;
+use crate::Message;
 use crate::auth::jwt::Claims;
 use crate::bus::models::routes::Route;
-use crate::Message;
 
 pub fn routes(state: Arc<AppState>) -> Router {
     let routes = module_routes(state.clone());

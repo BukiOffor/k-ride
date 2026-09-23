@@ -1,10 +1,9 @@
+use crate::logs::ActivityLog;
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
 use dotenvy::dotenv;
 use std::time::Duration;
-use crate::logs::ActivityLog;
 
 use super::*;
-
 
 pub async fn create_pool() -> crate::Pool {
     dotenv().ok();

@@ -1,6 +1,6 @@
-pub mod buses;
-pub mod routes;
-pub mod points;
 pub mod bookings;
+pub mod buses;
+pub mod points;
+pub mod routes;
 
 use super::*;

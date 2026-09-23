@@ -95,7 +95,7 @@ pub struct GetUsersQuery {
     #[serde(alias = "roles")]
     pub role: Option<RoleType>,
     pub is_active: Option<bool>,
-    pub pagination: Option<Pagination>
+    pub pagination: Option<Pagination>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema, AsChangeset, Default)]
@@ -109,7 +109,6 @@ pub struct UpdateUserDto {
     pub identity_type: Option<String>,
     pub identity_number: Option<String>,
 }
-
 
 // A simple UserDto built from the model
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
