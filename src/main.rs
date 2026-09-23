@@ -6,6 +6,7 @@ use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLay
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 use k_rides::users::swagger::UsersApiDoc;
+use k_rides::bus::swagger::BusApiDoc;
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
 
@@ -53,24 +54,24 @@ async fn main() {
         .allow_credentials(true)
         .allow_origin([
             "http://localhost:3000".parse::<HeaderValue>().unwrap(),
-            "http://localhost:5173".parse::<HeaderValue>().unwrap(),
-            "http://localhost:54465".parse::<HeaderValue>().unwrap(),
-            "http://127.0.0.1:3000".parse::<HeaderValue>().unwrap(),
-            "http://127.0.0.1:5173".parse::<HeaderValue>().unwrap(),
         ]);
 
     k_rides::config::start_log_workers(state.clone(), logger_receiver, 2).await;
 
     k_rides::info!("Starting Web Server ............");
 
-    let app = k_rides::users::handlers::routes(state)
+    let app = k_rides::users::handlers::routes(state.clone())
+        .merge(k_rides::bus::handlers::routes(state.clone()))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .layer(cors);
 
+    let mut openapi = UsersApiDoc::openapi();
+    openapi.merge(BusApiDoc::openapi());
+
     let api = axum::Router::new()
         .merge(SwaggerUi::new("/swagger-ui")
-        .url("/api-docs/openapi.json", UsersApiDoc::openapi()))
+        .url("/api-docs/openapi.json", openapi))
         .nest("/api/v1", app);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:9990").await.unwrap();
