@@ -44,15 +44,31 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-/// Create a new route (admin only; if marked as round trip, auto-generates return route)
+/// Create a transit route (Admin only)
+///
+/// Sets up a scheduled route connecting an origin and destination point, complete with departure/arrival times, fare pricing, and ride category.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
+///
+/// ### Round-Trip Auto-Generation
+/// - If `is_round_trip` is set to `true`, the system automatically provisions **both** the outbound trip and an inverted return route:
+///   - Origin and Destination points are swapped.
+///   - Intermediate waypoints are reversed.
+///   - Return departure and arrival times are calculated by applying the optional `return_delay_hours` offset (or default duration).
+///   - Links both legs using a common round-trip reference.
+///
+/// ### Returns
+/// A list containing the created route(s) (`[outbound]` or `[outbound, return]`).
 #[utoipa::path(
     post,
     path = "/routes",
     request_body = CreateRouteDto,
     responses(
-        (status = 200, description = "Route created successfully", body = Message<Vec<Route>>),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 200, description = "Route(s) created successfully", body = Message<Vec<Route>>),
+        (status = 400, description = "Bad request - Validation failure or invalid origin/destination IDs"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required")
     ),
     tag = "Routes"
 )]
@@ -71,7 +87,18 @@ pub async fn create_route(
     Ok(Json(response))
 }
 
-/// Get all routes with optional search, filters, and pagination
+/// Search and filter scheduled routes
+///
+/// Retrieves scheduled transit routes with filters for origin, destination, ride type, and departure window.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT (any authenticated role: `User`, `Admin`, `Driver`, etc.).
+///
+/// ### Query Parameters
+/// - `origin_id`: Filter by starting bus stop / terminal UUID.
+/// - `destination_id`: Filter by final destination terminal UUID.
+/// - `ride_type`: Filter by category (`Intercity`, `Intracity`, `Interstate`, `Campus`).
+/// - `page` & `limit`: Pagination controls.
 #[utoipa::path(
     get,
     path = "/routes",
@@ -80,7 +107,7 @@ pub async fn create_route(
     ),
     responses(
         (status = 200, description = "Routes retrieved successfully", body = Message<Vec<Route>>),
-        (status = 401, description = "Unauthorized")
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token")
     ),
     tag = "Routes"
 )]
@@ -93,17 +120,22 @@ pub async fn get_routes(
     Ok(Json(response))
 }
 
-/// Get route by ID
+/// Get route details by ID
+///
+/// Retrieves full route specifications including origin, destination, intermediate stop waypoints, departure time, fare, and completion state.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT (any authenticated role: `User`, `Admin`, `Driver`, etc.).
 #[utoipa::path(
     get,
     path = "/routes/{route_id}",
     params(
-        ("route_id" = Uuid, Path, description = "Route ID")
+        ("route_id" = Uuid, Path, description = "Unique UUID of the route to retrieve")
     ),
     responses(
         (status = 200, description = "Route retrieved successfully", body = Message<Route>),
-        (status = 404, description = "Route not found"),
-        (status = 401, description = "Unauthorized")
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 404, description = "Route not found")
     ),
     tag = "Routes"
 )]
@@ -116,19 +148,25 @@ pub async fn get_route_by_id(
     Ok(Json(response))
 }
 
-/// Update a route (admin only)
+/// Update route details (Admin only)
+///
+/// Updates timetable, fare, waypoints, or active status for an existing transit route.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
 #[utoipa::path(
     patch,
     path = "/routes/{route_id}",
     params(
-        ("route_id" = Uuid, Path, description = "Route ID")
+        ("route_id" = Uuid, Path, description = "Unique UUID of the route to update")
     ),
     request_body = UpdateRouteDto,
     responses(
         (status = 200, description = "Route updated successfully", body = Message<Route>),
-        (status = 404, description = "Route not found"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 400, description = "Bad request - Invalid payload data"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
+        (status = 404, description = "Route not found")
     ),
     tag = "Routes"
 )]
@@ -143,18 +181,27 @@ pub async fn update_route(
     Ok(Json(response))
 }
 
-/// Delete a route (admin only)
+/// Delete a route (Admin only)
+///
+/// Permanently deletes a scheduled route from the system.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
+///
+/// ### Constraints
+/// - Routes with existing passenger bookings or actively assigned buses cannot be deleted.
 #[utoipa::path(
     delete,
     path = "/routes/{route_id}",
     params(
-        ("route_id" = Uuid, Path, description = "Route ID")
+        ("route_id" = Uuid, Path, description = "Unique UUID of the route to delete")
     ),
     responses(
         (status = 200, description = "Route deleted successfully", body = Message<Route>),
-        (status = 404, description = "Route not found"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 400, description = "Bad request - Route has active bookings or buses assigned"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
+        (status = 404, description = "Route not found")
     ),
     tag = "Routes"
 )]
@@ -168,18 +215,23 @@ pub async fn delete_route(
     Ok(Json(response))
 }
 
-/// Mark route as completed and set completion time (admin only)
+/// Mark a route as completed (Admin only)
+///
+/// Concludes a route trip after the bus has safely reached the final terminal. Sets `is_completed = true` and records the `completed_at` timestamp.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
 #[utoipa::path(
     patch,
     path = "/routes/{route_id}/complete",
     params(
-        ("route_id" = Uuid, Path, description = "Route ID")
+        ("route_id" = Uuid, Path, description = "Unique UUID of the route to complete")
     ),
     responses(
         (status = 200, description = "Route marked as completed successfully", body = Message<Route>),
-        (status = 404, description = "Route not found"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
+        (status = 404, description = "Route not found")
     ),
     tag = "Routes"
 )]

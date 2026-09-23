@@ -48,15 +48,28 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-/// Create a booking (locks seat to prevent double-booking and increments passenger count)
+/// Book a seat on a scheduled bus trip
+///
+/// Reserves a seat on a bus for an itinerary. Supports both automatic seat allocation and specific seat selection.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT (any authenticated user).
+/// - Standard customers book for themselves (`claims.user_id`).
+/// - Users with `Admin` or `Root` roles can optionally provide a different `user_id` to book on behalf of a passenger.
+///
+/// ### Concurrency & Seat Allocation
+/// - **Row-Level Lock:** Performs a PostgreSQL `FOR UPDATE` lock on the bus record to prevent race conditions and overbooking.
+/// - **Automatic Allocation:** If `seat_number` is omitted, the system dynamically assigns the next lowest unoccupied seat (from 1 up to maximum bus capacity).
+/// - **Manual Selection:** If a specific `seat_number` is requested, the system verifies that the seat is within capacity bounds and not already booked by another active passenger.
+/// - **Passenger Count:** Automatically increments the bus `passenger_count`.
 #[utoipa::path(
     post,
     path = "/bookings",
     request_body = CreateBookingDto,
     responses(
         (status = 200, description = "Booking created successfully", body = Message<Booking>),
-        (status = 400, description = "Bad request (bus full, seat taken, or invalid parameters)"),
-        (status = 401, description = "Unauthorized"),
+        (status = 400, description = "Bad request - Bus is at maximum capacity, seat is already taken, or invalid parameters"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
         (status = 404, description = "Route or bus not found")
     ),
     tag = "Bookings"
@@ -73,17 +86,28 @@ pub async fn create_booking(
     Ok(Json(response))
 }
 
-/// Cancel a booking (decrements bus passenger count)
+/// Cancel a bus reservation
+///
+/// Cancels an existing booking, frees up the occupied seat for other passengers, and decrements the bus passenger occupancy.
+///
+/// ### Access Control
+/// - **Customer Cancellation:** Passengers can cancel their own bookings while in `Pending` or `Confirmed` status.
+/// - **Admin Cancellation:** Users with `Admin` or `Root` roles can cancel any booking.
+///
+/// ### Side Effects
+/// - Updates booking status to `Cancelled`.
+/// - Atomically decrements the bus `passenger_count`.
 #[utoipa::path(
     delete,
     path = "/bookings/{booking_id}",
     params(
-        ("booking_id" = Uuid, Path, description = "Booking ID")
+        ("booking_id" = Uuid, Path, description = "Unique UUID of the booking to cancel")
     ),
     responses(
         (status = 200, description = "Booking cancelled successfully", body = Message<Booking>),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied"),
+        (status = 400, description = "Bad request - Cannot cancel an already boarded or completed booking"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Cannot cancel another passenger's booking"),
         (status = 404, description = "Booking not found")
     ),
     tag = "Bookings"
@@ -100,7 +124,16 @@ pub async fn cancel_booking(
     Ok(Json(response))
 }
 
-/// Get my bookings
+/// View personal booking history
+///
+/// Retrieves all bookings belonging to the currently authenticated passenger, sorted by creation date.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT (any authenticated user).
+///
+/// ### Query Parameters
+/// - `status`: Filter by booking status (`Pending`, `Confirmed`, `Cancelled`, `Boarded`, `Completed`).
+/// - `page` & `limit`: Pagination controls.
 #[utoipa::path(
     get,
     path = "/bookings/me",
@@ -108,8 +141,8 @@ pub async fn cancel_booking(
         GetBookingsQuery
     ),
     responses(
-        (status = 200, description = "My bookings retrieved successfully", body = Message<Vec<Booking>>),
-        (status = 401, description = "Unauthorized")
+        (status = 200, description = "Personal bookings retrieved successfully", body = Message<Vec<Booking>>),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token")
     ),
     tag = "Bookings"
 )]
@@ -123,16 +156,26 @@ pub async fn get_my_bookings(
     Ok(Json(response))
 }
 
-/// Get bus seat availability map
+/// Get real-time seat availability map for a bus
+///
+/// Returns the seat layout and occupancy details for a specific bus, enabling passengers to visualize and select vacant seats.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT (any authenticated user).
+///
+/// ### Response Structure
+/// - `capacity`: Total number of seats on the bus.
+/// - `occupied_seats`: Array of seat numbers currently booked and unavailable.
+/// - `available_seats`: Array of open seat numbers ready for booking.
 #[utoipa::path(
     get,
     path = "/bookings/bus/{bus_id}/seats",
     params(
-        ("bus_id" = Uuid, Path, description = "Bus ID")
+        ("bus_id" = Uuid, Path, description = "Unique UUID of the bus")
     ),
     responses(
         (status = 200, description = "Bus seat map retrieved successfully", body = Message<BusSeatsResponseDto>),
-        (status = 401, description = "Unauthorized"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
         (status = 404, description = "Bus not found")
     ),
     tag = "Bookings"
@@ -146,17 +189,22 @@ pub async fn get_bus_seat_status(
     Ok(Json(response))
 }
 
-/// Get booking by ID
+/// Get booking details by ID
+///
+/// Retrieves complete reservation details including assigned seat, ticket fare, trip schedule, bus assignment, and payment status.
+///
+/// ### Access Control
+/// - **Requires:** The passenger who owns the reservation, or a user with `Admin` / `Root` privileges.
 #[utoipa::path(
     get,
     path = "/bookings/{booking_id}",
     params(
-        ("booking_id" = Uuid, Path, description = "Booking ID")
+        ("booking_id" = Uuid, Path, description = "Unique UUID of the booking")
     ),
     responses(
         (status = 200, description = "Booking retrieved successfully", body = Message<Booking>),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Cannot view another user's booking"),
         (status = 404, description = "Booking not found")
     ),
     tag = "Bookings"
@@ -173,7 +221,19 @@ pub async fn get_booking_by_id(
     Ok(Json(response))
 }
 
-/// Get all bookings with filters (Admin only)
+/// List and filter all bookings (Admin only)
+///
+/// Administrative overview of all passenger bookings across routes, buses, and users.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
+///
+/// ### Query Parameters
+/// - `bus_id`: Filter by assigned bus UUID.
+/// - `route_id`: Filter by scheduled route UUID.
+/// - `user_id`: Filter by passenger account UUID.
+/// - `status`: Filter by status (`Pending`, `Confirmed`, `Cancelled`, `Boarded`, `Completed`).
+/// - `page` & `limit`: Pagination controls.
 #[utoipa::path(
     get,
     path = "/bookings",
@@ -182,8 +242,8 @@ pub async fn get_booking_by_id(
     ),
     responses(
         (status = 200, description = "Bookings retrieved successfully", body = Message<Vec<Booking>>),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required")
     ),
     tag = "Bookings"
 )]
@@ -196,17 +256,23 @@ pub async fn get_bookings(
     Ok(Json(response))
 }
 
-/// Board a passenger (Admin only)
+/// Check-in and board a passenger (Admin / Conductor only)
+///
+/// Records ticket validation at the vehicle entrance. Transitions the booking status to `Boarded` and logs the timestamp.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role (conductors/inspectors).
 #[utoipa::path(
     patch,
     path = "/bookings/{booking_id}/board",
     params(
-        ("booking_id" = Uuid, Path, description = "Booking ID")
+        ("booking_id" = Uuid, Path, description = "Unique UUID of the booking being boarded")
     ),
     responses(
         (status = 200, description = "Passenger boarded successfully", body = Message<Booking>),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied"),
+        (status = 400, description = "Bad request - Booking is cancelled or already boarded"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
         (status = 404, description = "Booking not found")
     ),
     tag = "Bookings"
@@ -222,17 +288,23 @@ pub async fn board_passenger(
 }
 
 /// Update booking payment status (Admin only)
+///
+/// Updates financial transaction settlement for a ticket reservation (`Pending`, `Paid`, `Failed`, `Refunded`).
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
 #[utoipa::path(
     patch,
     path = "/bookings/{booking_id}/payment",
     params(
-        ("booking_id" = Uuid, Path, description = "Booking ID")
+        ("booking_id" = Uuid, Path, description = "Unique UUID of the booking")
     ),
     request_body = UpdatePaymentStatusDto,
     responses(
         (status = 200, description = "Payment status updated successfully", body = Message<Booking>),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied"),
+        (status = 400, description = "Bad request - Invalid payment status value"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
         (status = 404, description = "Booking not found")
     ),
     tag = "Bookings"

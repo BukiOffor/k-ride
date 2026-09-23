@@ -93,15 +93,27 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-/// Create a new bus
+/// Register a new bus in the fleet (Admin only)
+///
+/// Adds a new vehicle into the transit fleet with its seating capacity, registration number, model, and optional route assignment.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
+///
+/// ### Request Body
+/// - `registration_number`: Unique vehicle license plate / registration.
+/// - `capacity`: Total passenger seating capacity (e.g. 14, 30, 60).
+/// - `route_id`: Optional initial route to assign the bus to.
+/// - `model` & `amenities`: Vehicle manufacturer, year, and features (e.g. AC, WiFi).
 #[utoipa::path(
     post,
     path = "/buses",
     request_body = CreateBusDto,
     responses(
         (status = 200, description = "Bus created successfully", body = Message<Bus>),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 400, description = "Bad request - Validation error or duplicate registration number"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required")
     ),
     tag = "Buses"
 )]
@@ -115,7 +127,18 @@ pub async fn create_bus(
     Ok(Json(response))
 }
 
-/// Get all buses with optional filter and pagination
+/// List and filter buses in the fleet
+///
+/// Retrieves fleet vehicles with optional filtering by operational state, service status, assigned route, and pagination.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT (any authenticated role: `User`, `Admin`, `Driver`, etc.).
+///
+/// ### Query Parameters
+/// - `state`: Operational movement state (`Transit`, `Arrived`, `Stationary`, `Boarding`).
+/// - `status`: Mechanical / availability status (`Available`, `Maintenance`, `InUse`).
+/// - `route_id`: Filter buses currently allocated to a specific route UUID.
+/// - `page` & `limit`: Pagination controls.
 #[utoipa::path(
     get,
     path = "/buses",
@@ -124,8 +147,7 @@ pub async fn create_bus(
     ),
     responses(
         (status = 200, description = "Buses retrieved successfully", body = Message<Vec<Bus>>),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token")
     ),
     tag = "Buses"
 )]
@@ -138,18 +160,22 @@ pub async fn get_buses(
     Ok(Json(response))
 }
 
-/// Get bus by ID
+/// Get bus details by ID
+///
+/// Retrieves full operational profile for a single bus, including seating capacity, current occupied seats, state, status, and assigned route.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT (any authenticated role: `User`, `Admin`, `Driver`, etc.).
 #[utoipa::path(
     get,
     path = "/buses/{bus_id}",
     params(
-        ("bus_id" = Uuid, Path, description = "Bus ID")
+        ("bus_id" = Uuid, Path, description = "Unique UUID of the bus to retrieve")
     ),
     responses(
         (status = 200, description = "Bus retrieved successfully", body = Message<Bus>),
-        (status = 404, description = "Bus not found"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 404, description = "Bus not found")
     ),
     tag = "Buses"
 )]
@@ -162,19 +188,25 @@ pub async fn get_bus_by_id(
     Ok(Json(response))
 }
 
-/// Update a bus
+/// Update bus fleet metadata (Admin only)
+///
+/// Modifies vehicle specifications, registration plate, amenities, or notes.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
 #[utoipa::path(
     patch,
     path = "/buses/{bus_id}",
     params(
-        ("bus_id" = Uuid, Path, description = "Bus ID")
+        ("bus_id" = Uuid, Path, description = "Unique UUID of the bus to update")
     ),
     request_body = UpdateBusDto,
     responses(
         (status = 200, description = "Bus updated successfully", body = Message<Bus>),
-        (status = 404, description = "Bus not found"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 400, description = "Bad request - Invalid payload data"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
+        (status = 404, description = "Bus not found")
     ),
     tag = "Buses"
 )]
@@ -189,18 +221,26 @@ pub async fn update_bus(
     Ok(Json(response))
 }
 
-/// Delete a bus
+/// Remove a bus from the fleet (Admin only)
+///
+/// Permanently deletes a bus record from the fleet management system.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
+///
+/// ### Constraints
+/// - Buses with active bookings cannot be deleted until bookings are fulfilled or cancelled.
 #[utoipa::path(
     delete,
     path = "/buses/{bus_id}",
     params(
-        ("bus_id" = Uuid, Path, description = "Bus ID")
+        ("bus_id" = Uuid, Path, description = "Unique UUID of the bus to delete")
     ),
     responses(
         (status = 200, description = "Bus deleted successfully", body = Message<Bus>),
-        (status = 404, description = "Bus not found"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
+        (status = 404, description = "Bus not found")
     ),
     tag = "Buses"
 )]
@@ -214,14 +254,22 @@ pub async fn delete_bus(
     Ok(Json(response))
 }
 
-/// Reset all bus routes and allocations
+/// Batch reset all bus routes and allocations (Admin only)
+///
+/// End-of-day or shift-reset routine that clears all assigned routes, resets passenger counts to 0, sets movement state to `Stationary`, and marks status as `Available` across all buses in the fleet.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
+///
+/// ### Returns
+/// Count of fleet buses successfully reset.
 #[utoipa::path(
     post,
     path = "/buses/reset-routes",
     responses(
-        (status = 200, description = "Bus routes reset successfully", body = Message<usize>),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 200, description = "All bus routes reset successfully", body = Message<usize>),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required")
     ),
     tag = "Buses"
 )]
@@ -234,19 +282,31 @@ pub async fn reset_all_bus_routes(
     Ok(Json(response))
 }
 
-/// Change bus state (Transit, Arrived, Stationary, Boarding)
+/// Update bus operational movement state (Admin only)
+///
+/// Updates the real-time operational trip state of the bus.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
+///
+/// ### States
+/// - `Stationary`: Bus parked at terminus or depot.
+/// - `Boarding`: Doors open, accepting confirmed passengers.
+/// - `Transit`: In transit en route to destination.
+/// - `Arrived`: Arrived at destination station.
 #[utoipa::path(
     patch,
     path = "/buses/{bus_id}/state",
     params(
-        ("bus_id" = Uuid, Path, description = "Bus ID")
+        ("bus_id" = Uuid, Path, description = "Unique UUID of the bus whose state is being updated")
     ),
     request_body = ChangeBusStateDto,
     responses(
         (status = 200, description = "Bus state updated successfully", body = Message<Bus>),
-        (status = 404, description = "Bus not found"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 400, description = "Bad request - Invalid state value"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
+        (status = 404, description = "Bus not found")
     ),
     tag = "Buses"
 )]
@@ -262,19 +322,29 @@ pub async fn change_bus_state(
     Ok(Json(response))
 }
 
-/// Change bus route assignment
+/// Assign or change bus route (Admin only)
+///
+/// Assigns a bus to a specific active route, or unassigns it by passing null/empty route ID.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
+///
+/// ### Behavior
+/// - Validates that the referenced route exists and is active.
+/// - Attaches the route UUID to the bus record.
 #[utoipa::path(
     patch,
     path = "/buses/{bus_id}/route",
     params(
-        ("bus_id" = Uuid, Path, description = "Bus ID")
+        ("bus_id" = Uuid, Path, description = "Unique UUID of the bus")
     ),
     request_body = ChangeBusRouteDto,
     responses(
         (status = 200, description = "Bus route updated successfully", body = Message<Bus>),
-        (status = 404, description = "Bus not found"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 400, description = "Bad request - Route does not exist or is inactive"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
+        (status = 404, description = "Bus not found")
     ),
     tag = "Buses"
 )]
@@ -290,19 +360,30 @@ pub async fn change_bus_route(
     Ok(Json(response))
 }
 
-/// Change bus status (Available, Maintenance, InUse)
+/// Update bus availability status (Admin only)
+///
+/// Updates the mechanical / deployment status of the bus.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
+///
+/// ### Status Options
+/// - `Available`: Ready for passenger boarding or route assignment.
+/// - `Maintenance`: Grounded for mechanical inspection or servicing.
+/// - `InUse`: Active on an ongoing trip.
 #[utoipa::path(
     patch,
     path = "/buses/{bus_id}/status",
     params(
-        ("bus_id" = Uuid, Path, description = "Bus ID")
+        ("bus_id" = Uuid, Path, description = "Unique UUID of the bus")
     ),
     request_body = ChangeBusStatusDto,
     responses(
         (status = 200, description = "Bus status updated successfully", body = Message<Bus>),
-        (status = 404, description = "Bus not found"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 400, description = "Bad request - Invalid status value"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
+        (status = 404, description = "Bus not found")
     ),
     tag = "Buses"
 )]
@@ -318,18 +399,23 @@ pub async fn change_bus_status(
     Ok(Json(response))
 }
 
-/// Reset a single bus (clears passenger count, route, sets state to Stationary and status to Available)
+/// Reset single bus state and route assignment (Admin only)
+///
+/// Clears the bus passenger count to 0, detaches any active route assignment, sets state to `Stationary`, and resets status to `Available`.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
 #[utoipa::path(
     post,
     path = "/buses/{bus_id}/reset",
     params(
-        ("bus_id" = Uuid, Path, description = "Bus ID")
+        ("bus_id" = Uuid, Path, description = "Unique UUID of the bus to reset")
     ),
     responses(
         (status = 200, description = "Bus reset successfully", body = Message<Bus>),
-        (status = 404, description = "Bus not found"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
+        (status = 404, description = "Bus not found")
     ),
     tag = "Buses"
 )]
@@ -343,20 +429,28 @@ pub async fn reset_bus(
     Ok(Json(response))
 }
 
-/// Change bus passenger allocation
+/// Manually adjust bus passenger occupancy count (Admin only)
+///
+/// Overrides or sets the current count of boarded passengers on a bus.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
+///
+/// ### Validation
+/// - The `passenger_count` cannot be negative and cannot exceed the bus's configured maximum `capacity`.
 #[utoipa::path(
     patch,
     path = "/buses/{bus_id}/allocation",
     params(
-        ("bus_id" = Uuid, Path, description = "Bus ID")
+        ("bus_id" = Uuid, Path, description = "Unique UUID of the bus")
     ),
     request_body = ChangeBusAllocationDto,
     responses(
         (status = 200, description = "Bus allocation updated successfully", body = Message<Bus>),
-        (status = 400, description = "Bad request"),
-        (status = 404, description = "Bus not found"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 400, description = "Bad request - Passenger count exceeds bus capacity"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
+        (status = 404, description = "Bus not found")
     ),
     tag = "Buses"
 )]
@@ -377,20 +471,28 @@ pub async fn change_bus_allocation(
     Ok(Json(response))
 }
 
-/// Change bus capacity
+/// Update bus maximum seating capacity (Admin only)
+///
+/// Changes the total available seats on a bus.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
+///
+/// ### Validation
+/// - New capacity must be greater than zero and cannot be less than the current active passenger count.
 #[utoipa::path(
     patch,
     path = "/buses/{bus_id}/capacity",
     params(
-        ("bus_id" = Uuid, Path, description = "Bus ID")
+        ("bus_id" = Uuid, Path, description = "Unique UUID of the bus")
     ),
     request_body = ChangeBusCapacityDto,
     responses(
         (status = 200, description = "Bus capacity updated successfully", body = Message<Bus>),
-        (status = 400, description = "Bad request"),
-        (status = 404, description = "Bus not found"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 400, description = "Bad request - Capacity cannot be less than current passenger occupancy"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
+        (status = 404, description = "Bus not found")
     ),
     tag = "Buses"
 )]
@@ -406,18 +508,23 @@ pub async fn change_bus_capacity(
     Ok(Json(response))
 }
 
-/// Clear bus current allocation (sets passenger count to 0)
+/// Clear bus passenger occupancy to zero (Admin only)
+///
+/// Disembarks all passengers and resets the bus `passenger_count` to 0.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
 #[utoipa::path(
     post,
     path = "/buses/{bus_id}/clear-allocation",
     params(
-        ("bus_id" = Uuid, Path, description = "Bus ID")
+        ("bus_id" = Uuid, Path, description = "Unique UUID of the bus")
     ),
     responses(
         (status = 200, description = "Bus allocation cleared successfully", body = Message<Bus>),
-        (status = 404, description = "Bus not found"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
+        (status = 404, description = "Bus not found")
     ),
     tag = "Buses"
 )]

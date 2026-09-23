@@ -72,15 +72,27 @@ fn log_activity(state: &Arc<AppState>, mut log: ActivityLog, headers: &HeaderMap
     }
 }
 
-/// An Admin creates a user a assigns them a role type.
+/// Create a user and assign a role (Admin only)
+///
+/// Provisions a new user account with an explicitly assigned role (`User`, `Admin`, `Driver`, `Inspector`, or `Root`).
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
+///
+/// ### Behavior
+/// - Validates unique email and username constraints.
+/// - Hashes the account password securely with bcrypt before persisting.
+/// - Records an `ActivityType::UserCreated` audit log entry with actor and target IDs.
+/// - Returns the created user's sanitized profile (`UserDto`).
 #[utoipa::path(
     post,
     path = "/users/admin",
     request_body = AdminCreateUserDto,
     responses(
         (status = 200, description = "User created successfully", body = UserDto),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 400, description = "Invalid request payload or duplicate email/username"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required")
     ),
     tag = "Users"
 )]
@@ -103,18 +115,30 @@ pub async fn create_user(
     Ok(Json(response))
 }
 
+/// Assign or change a user's role (Admin only)
+///
+/// Updates the authorization role for an existing user account.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
+///
+/// ### Behavior
+/// - Available roles: `User`, `Admin`, `Driver`, `Inspector`, `Root`.
+/// - Records an `ActivityType::UserUpdated` audit log entry detailing the transition.
+/// - Returns the updated user profile reflecting the newly assigned role.
 #[utoipa::path(
     patch,
     path = "/users/{user_id}/role",
     params(
-        ("user_id" = Uuid, Path, description = "User ID")
+        ("user_id" = Uuid, Path, description = "Unique UUID of the user whose role is being changed")
     ),
     request_body = AssignRoleDto,
     responses(
-        (status = 200, description = "Role assigned to user successfully", body = UserDto),
-        (status = 404, description = "User not found"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 200, description = "Role assigned successfully", body = UserDto),
+        (status = 400, description = "Invalid role value provided"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
+        (status = 404, description = "User not found")
     ),
     tag = "Users"
 )]
@@ -141,13 +165,26 @@ pub async fn assign_role_to_user(
     Ok(Json(response))
 }
 
-/// Register as a user, by default has a User Role. User registers their account.
+/// Self-register a new user account (Public)
+///
+/// Allows new public customers to register for an account on the K-Ride platform.
+///
+/// ### Access Control
+/// - **Public:** No authentication token required.
+///
+/// ### Behavior
+/// - Automatically assigns the standard `User` role.
+/// - Sets account status to active (`is_active = true`).
+/// - Hashes the password with bcrypt before storing.
+/// - Records an `ActivityType::AccountCreated` audit log entry.
+/// - Returns the newly registered user's profile (`UserDto`).
 #[utoipa::path(
     post,
     path = "/users/register",
     request_body = CreateUserDto,
     responses(
-        (status = 200, description = "User registered successfully", body = UserDto)
+        (status = 200, description = "User registered successfully", body = UserDto),
+        (status = 400, description = "Validation error (e.g. invalid email format, short password, or duplicate email/username)")
     ),
     tag = "Users"
 )]
@@ -169,8 +206,18 @@ pub async fn register_user(
     Ok(Json(response))
 }
 
-/// Get all users with search by username, email and names and filter by roles and is_active.
-/// If pagination is empty, gets all users
+/// List and search users with filters (Admin only)
+///
+/// Retrieves a list of users supporting multi-field search, role filtering, active status filter, and pagination.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
+///
+/// ### Query Parameters
+/// - `search`: Case-insensitive partial matching against `username`, `email`, `first_name`, and `last_name`.
+/// - `roles`: Filter users by specific role (`User`, `Admin`, `Driver`, etc.).
+/// - `is_active`: Filter by active (`true`) or deactivated (`false`) status.
+/// - `page` & `limit`: Optional pagination window (if omitted, all matched records are returned).
 #[utoipa::path(
     get,
     path = "/users",
@@ -179,8 +226,8 @@ pub async fn register_user(
     ),
     responses(
         (status = 200, description = "Users retrieved successfully", body = Vec<UserDto>),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required")
     ),
     tag = "Users"
 )]
@@ -193,18 +240,26 @@ pub async fn get_users(
     Ok(Json(response))
 }
 
-/// Get a user by ID
+/// Get user profile by ID
+///
+/// Fetches detailed profile information for a single user given their UUID.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role, or an authenticated user retrieving their own record.
+///
+/// ### Response
+/// Returns the user's public profile data (`UserDto`), including contact info, role, and active status.
 #[utoipa::path(
     get,
     path = "/users/{user_id}",
     params(
-        ("user_id" = Uuid, Path, description = "User ID")
+        ("user_id" = Uuid, Path, description = "Unique UUID of the user to retrieve")
     ),
     responses(
         (status = 200, description = "User retrieved successfully", body = UserDto),
-        (status = 404, description = "User not found"),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied")
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Insufficient permissions"),
+        (status = 404, description = "User not found")
     ),
     tag = "Users"
 )]
@@ -217,18 +272,29 @@ pub async fn get_user_by_id(
     Ok(Json(response))
 }
 
-/// Update a user
+/// Update user profile details
+///
+/// Modifies profile information (e.g. name, email, phone number, avatar URL) for an existing user.
+///
+/// ### Access Control
+/// - **Self-update:** Any authenticated user may update their own profile.
+/// - **Admin-update:** Users with `Admin` or `Root` roles may update any user profile.
+///
+/// ### Behavior
+/// - Only provided non-null fields in the request body are modified.
+/// - Records an `ActivityType::UserUpdated` audit log entry detailing modified fields.
 #[utoipa::path(
     patch,
     path = "/users/{user_id}",
     params(
-        ("user_id" = Uuid, Path, description = "User ID")
+        ("user_id" = Uuid, Path, description = "Unique UUID of the user to update")
     ),
     request_body = UpdateUserDto,
     responses(
         (status = 200, description = "User updated successfully", body = UserDto),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied"),
+        (status = 400, description = "Bad request - Invalid input payload"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - You can only edit your own profile unless Admin/Root"),
         (status = 404, description = "User not found")
     ),
     tag = "Users"
@@ -258,17 +324,26 @@ pub async fn update_user(
     Ok(Json(response))
 }
 
-/// Activate a user by admin
+/// Activate a suspended user account (Admin only)
+///
+/// Re-enables account access for a previously deactivated user by setting `is_active = true`.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
+///
+/// ### Behavior
+/// - Once activated, the user can successfully log in and book rides again.
+/// - Records an `ActivityType::UserActivation` audit log.
 #[utoipa::path(
     patch,
     path = "/users/{user_id}/activate",
     params(
-        ("user_id" = Uuid, Path, description = "User ID")
+        ("user_id" = Uuid, Path, description = "Unique UUID of the user account to activate")
     ),
     responses(
         (status = 200, description = "User activated successfully", body = UserDto),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
         (status = 404, description = "User not found")
     ),
     tag = "Users"
@@ -290,17 +365,26 @@ pub async fn activate_user(
     Ok(Json(response))
 }
 
-/// Deactivate a user by admin
+/// Deactivate a user account (Admin only)
+///
+/// Suspends a user account by setting `is_active = false`.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
+///
+/// ### Behavior
+/// - Suspended accounts are immediately blocked from authentication and API operations.
+/// - Records an `ActivityType::UserDeactivation` audit log.
 #[utoipa::path(
     patch,
     path = "/users/{user_id}/deactivate",
     params(
-        ("user_id" = Uuid, Path, description = "User ID")
+        ("user_id" = Uuid, Path, description = "Unique UUID of the user account to deactivate")
     ),
     responses(
         (status = 200, description = "User deactivated successfully", body = UserDto),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
         (status = 404, description = "User not found")
     ),
     tag = "Users"
@@ -322,17 +406,27 @@ pub async fn deactivate_user(
     Ok(Json(response))
 }
 
-/// Delete a user by admin
+/// Permanently delete a user account (Admin only)
+///
+/// Hard deletes a user record from the database.
+///
+/// ### Access Control
+/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
+///
+/// ### Behavior
+/// - Removes the user record and dependent cascades.
+/// - Records an `ActivityType::UserDeleted` audit log.
+/// - Returns the removed user's record data for confirmation.
 #[utoipa::path(
     delete,
     path = "/users/{user_id}",
     params(
-        ("user_id" = Uuid, Path, description = "User ID")
+        ("user_id" = Uuid, Path, description = "Unique UUID of the user account to delete")
     ),
     responses(
         (status = 200, description = "User deleted successfully", body = UserDto),
-        (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Permission denied"),
+        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
+        (status = 403, description = "Forbidden - Admin or Root role required"),
         (status = 404, description = "User not found")
     ),
     tag = "Users"
