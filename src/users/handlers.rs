@@ -45,11 +45,11 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
                     crate::auth::middleware::authorize,
                 )),
         )
-        .route("/", post(register_user))
         .layer(ServiceBuilder::new().layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::authorize,
         )))
+        .route("/", post(register_user))
         .with_state(state)
 }
 
