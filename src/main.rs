@@ -61,6 +61,8 @@ async fn main() {
         .allow_origin([
             "http://localhost:3000".parse::<HeaderValue>().unwrap(),
             "http://localhost:5173".parse::<HeaderValue>().unwrap(),
+            "https://ktvn-beryl.vercel.app".parse::<HeaderValue>().unwrap()
+
         ]);
 
     k_rides::config::start_log_workers(state.clone(), logger_receiver, 2).await;
