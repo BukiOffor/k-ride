@@ -25,6 +25,7 @@ pub struct Booking {
     pub payment_status: PaymentStatus,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
+    pub qr_code: Option<String>,
 }
 
 impl Booking {
@@ -42,6 +43,7 @@ impl Booking {
             payment_status: PaymentStatus::Pending,
             created_at: now,
             updated_at: now,
+            qr_code: None,
         }
     }
 }

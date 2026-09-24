@@ -94,6 +94,7 @@ diesel::table! {
         payment_status -> Text,
         created_at -> Timestamp,
         updated_at -> Timestamp,
+        qr_code -> Nullable<Text>,
     }
 }
 

@@ -39,3 +39,33 @@ pub struct BusSeatsResponseDto {
     pub booked_seats: Vec<i32>,
     pub available_seats: Vec<i32>,
 }
+
+/// Response containing a base64-encoded QR code PNG image for a booking pass.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct BookingQrCodeResponse {
+    /// The booking ID encoded in the QR code
+    pub booking_id: Uuid,
+    /// The human-readable booking reference
+    pub booking_ref: String,
+    /// Base64-encoded PNG image of the QR code
+    pub qr_code_base64: String,
+}
+
+/// Payload sent by the admin/conductor after scanning a QR code.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct VerifyBookingDto {
+    /// The raw string content extracted from the scanned QR code
+    pub qr_payload: String,
+}
+
+/// Result returned after verifying a scanned QR code booking pass.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct BookingVerificationResult {
+    pub valid: bool,
+    pub booking_id: Option<Uuid>,
+    pub booking_ref: Option<String>,
+    pub status: Option<BookingStatus>,
+    pub payment_status: Option<PaymentStatus>,
+    pub seat_number: Option<i32>,
+    pub message: String,
+}

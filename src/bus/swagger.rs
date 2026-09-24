@@ -36,6 +36,8 @@ use utoipa::OpenApi;
         super::handlers::bookings::get_bookings,
         super::handlers::bookings::board_passenger,
         super::handlers::bookings::update_payment_status,
+        super::handlers::bookings::get_booking_qr,
+        super::handlers::bookings::verify_booking_qr,
     ),
     components(schemas(
         super::dtos::points::CreatePointDto,
@@ -66,6 +68,9 @@ use utoipa::OpenApi;
         super::dtos::bookings::UpdatePaymentStatusDto,
         super::dtos::bookings::GetBookingsQuery,
         super::dtos::bookings::BusSeatsResponseDto,
+        super::dtos::bookings::BookingQrCodeResponse,
+        super::dtos::bookings::VerifyBookingDto,
+        super::dtos::bookings::BookingVerificationResult,
         super::models::bookings::Booking,
         super::models::bookings::BookingStatus,
         super::models::bookings::PaymentStatus,
