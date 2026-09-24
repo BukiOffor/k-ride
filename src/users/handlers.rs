@@ -33,13 +33,14 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
         )))
         .route(
             "/{user_id}",
-            get(get_user_by_id)
-                .delete(delete_user)
+           
+                delete(delete_user)
                 .route_layer(middleware::from_fn_with_state(
                     state.clone(),
                     crate::auth::middleware::admin_authorize,
                 ))
                 .patch(update_user)
+                .get(get_user_by_id)
                 .route_layer(middleware::from_fn_with_state(
                     state.clone(),
                     crate::auth::middleware::authorize,
@@ -180,7 +181,7 @@ pub async fn assign_role_to_user(
 /// - Returns the newly registered user's profile (`UserDto`).
 #[utoipa::path(
     post,
-    path = "/users/register",
+    path = "/users",
     request_body = CreateUserDto,
     responses(
         (status = 200, description = "User registered successfully", body = UserDto),
