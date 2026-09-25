@@ -1,6 +1,6 @@
 use super::*;
 use crate::Message;
-use crate::auth::dto::{LoginPayload, LoginResponseDto};
+use crate::auth::dto::{LoginPayload, LoginResponseDto, RefreshTokenPayload};
 use crate::logs::{ActivityLog, ActivityType};
 use axum::http::HeaderMap;
 use axum::routing::post;
@@ -18,6 +18,7 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/login", post(login))
         .route("/logout", post(logout))
+        .route("/refresh", post(refresh))
         .with_state(state)
 }
 
@@ -88,3 +89,40 @@ pub async fn logout(jar: CookieJar) -> (CookieJar, Json<Message<String>>) {
     let message = Message::context("Logout successful", "Session ended".to_string());
     (jar, Json(message))
 }
+
+/// Refresh session token
+///
+/// Renews an active session using a refresh token provided via HTTP-only cookie,
+/// `Authorization: Bearer <refresh_token>` header, or request body.
+/// Returns a new access token, a rotated refresh token, and updated session cookies.
+#[utoipa::path(
+    post,
+    path = "/auth/refresh",
+    request_body(content = Option<RefreshTokenPayload>, description = "Optional refresh token payload if not sent via cookie or Authorization header"),
+    responses(
+        (status = 200, description = "Session refreshed successfully", body = Message<LoginResponseDto>),
+        (status = 401, description = "Invalid or expired refresh token"),
+        (status = 403, description = "Account is inactive")
+    ),
+    tag = "Auth"
+)]
+pub async fn refresh(
+    State(state): State<Arc<AppState>>,
+    jar: CookieJar,
+    headers: HeaderMap,
+    payload: Option<Json<RefreshTokenPayload>>,
+) -> Result<(CookieJar, Json<Message<LoginResponseDto>>), ModuleError> {
+    let token_str = payload
+        .and_then(|Json(p)| p.refresh_token)
+        .or_else(|| {
+            headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|h| h.to_str().ok())
+                .map(|s| s.strip_prefix("Bearer ").unwrap_or(s).trim().to_string())
+        });
+
+    let (jar, response) = service::refresh(jar, state.pool.clone(), token_str).await?;
+    let message = Message::context("Session refreshed successfully.", response);
+    Ok((jar, Json(message)))
+}
+

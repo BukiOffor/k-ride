@@ -13,3 +13,8 @@ pub struct LoginResponseDto {
     pub refresh_token: String,
     pub token_type: String,
 }
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct RefreshTokenPayload {
+    pub refresh_token: Option<String>,
+}
