@@ -26,10 +26,11 @@ pub struct Booking {
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
     pub qr_code: Option<String>,
+    pub trip_id: Option<Uuid>,
 }
 
 impl Booking {
-    pub fn new(user_id: Uuid, bus_id: Uuid, route_id: Uuid, seat_number: i32) -> Self {
+    pub fn new(user_id: Uuid, bus_id: Uuid, route_id: Uuid, trip_id: Option<Uuid>, seat_number: i32) -> Self {
         let now = chrono::Utc::now().naive_utc();
         let ref_code = Uuid::now_v7().to_string()[..8].to_uppercase();
         Self {
@@ -38,6 +39,7 @@ impl Booking {
             user_id,
             bus_id,
             route_id,
+            trip_id,
             seat_number,
             status: BookingStatus::Confirmed,
             payment_status: PaymentStatus::Pending,

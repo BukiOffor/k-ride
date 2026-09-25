@@ -28,7 +28,7 @@ diesel::table! {
         license_plate -> Text,
         capacity -> Integer,
         current_passenger_count -> Integer,
-        current_route_id -> Nullable<Uuid>,
+        current_trip_id -> Nullable<Uuid>,
         state -> Text,
         status -> Text,
         created_at -> Timestamp,
@@ -57,12 +57,7 @@ diesel::table! {
         end_point -> Uuid,
         fare -> Float,
         distance -> Float,
-        ride_type -> Text,
         stops -> Array<Uuid>,
-        departure_time -> Time,
-        departure_date -> Date,
-        is_completed -> Bool,
-        time_completed -> Nullable<Timestamp>,
         created_at -> Timestamp,
         updated_at -> Timestamp,
     }
@@ -95,6 +90,24 @@ diesel::table! {
         created_at -> Timestamp,
         updated_at -> Timestamp,
         qr_code -> Nullable<Text>,
+        trip_id -> Nullable<Uuid>,
+    }
+}
+
+diesel::table! {
+    trips (id) {
+        id -> Uuid,
+        route_id -> Uuid,
+        bus_id -> Nullable<Uuid>,
+        driver_id -> Nullable<Uuid>,
+        departure_time -> Timestamp,
+        arrival_time -> Timestamp,
+        actual_departure_time -> Nullable<Timestamp>,
+        actual_arrival_time -> Nullable<Timestamp>,
+        ride_type -> Text,
+        status -> Text,
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
     }
 }
 
@@ -104,5 +117,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     points,
     routes,
     activity_logs,
-    bookings
+    bookings,
+    trips
 );

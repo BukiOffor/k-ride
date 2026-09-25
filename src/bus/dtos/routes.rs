@@ -1,4 +1,3 @@
-use super::super::models::routes::RideType;
 use super::*;
 use crate::types::Pagination;
 use string_validator::Validate;
@@ -11,14 +10,8 @@ pub struct CreateRouteDto {
     pub end_point: Uuid,
     pub fare: f32,
     pub distance: f32,
-    pub ride_type: RideType,
     #[schema(value_type = Vec<String>)]
     pub stops: Vec<Uuid>,
-    pub departure_time: chrono::NaiveTime,
-    pub departure_date: chrono::NaiveDate,
-    pub is_round_trip: Option<bool>,
-    pub return_departure_time: Option<chrono::NaiveTime>,
-    pub return_departure_date: Option<chrono::NaiveDate>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema, AsChangeset, Default)]
@@ -30,12 +23,7 @@ pub struct UpdateRouteDto {
     pub end_point: Option<Uuid>,
     pub fare: Option<f32>,
     pub distance: Option<f32>,
-    pub ride_type: Option<RideType>,
     pub stops: Option<Vec<Uuid>>,
-    pub departure_time: Option<chrono::NaiveTime>,
-    pub departure_date: Option<chrono::NaiveDate>,
-    pub is_completed: Option<bool>,
-    pub time_completed: Option<Option<NaiveDateTime>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
@@ -43,8 +31,5 @@ pub struct GetRoutesQuery {
     pub search: Option<String>,
     pub start_point: Option<Uuid>,
     pub end_point: Option<Uuid>,
-    pub ride_type: Option<RideType>,
-    pub departure_date: Option<chrono::NaiveDate>,
-    pub is_completed: Option<bool>,
     pub pagination: Option<Pagination>,
 }

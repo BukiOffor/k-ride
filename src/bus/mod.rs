@@ -5,7 +5,7 @@ pub mod services;
 pub mod swagger;
 
 pub use dtos::*;
-pub use models::{bookings::*, buses::*, points::*, routes::*};
+pub use models::{bookings::*, buses::*, points::*, routes::*, trips::*};
 
 // Axum re-exports for handler convenience
 pub use axum::{

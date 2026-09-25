@@ -22,12 +22,7 @@ pub struct Route {
     pub end_point: Uuid,
     pub fare: f32,
     pub distance: f32,
-    pub ride_type: RideType,
     pub stops: Vec<Uuid>,
-    pub departure_time: chrono::NaiveTime,
-    pub departure_date: chrono::NaiveDate,
-    pub is_completed: bool,
-    pub time_completed: Option<NaiveDateTime>,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
 }

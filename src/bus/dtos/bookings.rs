@@ -6,6 +6,7 @@ use crate::types::Pagination;
 pub struct CreateBookingDto {
     pub bus_id: Uuid,
     pub route_id: Uuid,
+    pub trip_id: Option<Uuid>,
     pub seat_number: Option<i32>,
     pub user_id: Option<Uuid>,
 }

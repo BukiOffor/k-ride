@@ -30,13 +30,6 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
                 ))
                 .get(get_route_by_id),
         )
-        .route(
-            "/{route_id}/complete",
-            patch(complete_route).route_layer(middleware::from_fn_with_state(
-                state.clone(),
-                crate::auth::middleware::coordinator_authorize,
-            )),
-        )
         .layer(ServiceBuilder::new().layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::authorize,
@@ -46,26 +39,20 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
 
 /// Create a transit route (Admin only)
 ///
-/// Sets up a scheduled route connecting an origin and destination point, complete with departure/arrival times, fare pricing, and ride category.
+/// Defines a persistent geographic route connecting an origin and destination point, with fare pricing and intermediate stops.
+/// Routes are reusable path definitions. To schedule an actual departure, create a Trip referencing this route.
 ///
 /// ### Access Control
 /// - **Requires:** Bearer JWT with `Admin` or `Root` role.
 ///
-/// ### Round-Trip Auto-Generation
-/// - If `is_round_trip` is set to `true`, the system automatically provisions **both** the outbound trip and an inverted return route:
-///   - Origin and Destination points are swapped.
-///   - Intermediate waypoints are reversed.
-///   - Return departure and arrival times are calculated by applying the optional `return_delay_hours` offset (or default duration).
-///   - Links both legs using a common round-trip reference.
-///
 /// ### Returns
-/// A list containing the created route(s) (`[outbound]` or `[outbound, return]`).
+/// The created route.
 #[utoipa::path(
     post,
     path = "/routes",
     request_body = CreateRouteDto,
     responses(
-        (status = 200, description = "Route(s) created successfully", body = Message<Vec<Route>>),
+        (status = 200, description = "Route created successfully", body = Message<Route>),
         (status = 400, description = "Bad request - Validation failure or invalid origin/destination IDs"),
         (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
         (status = 403, description = "Forbidden - Admin or Root role required")
@@ -76,29 +63,18 @@ pub async fn create_route(
     State(state): State<Arc<AppState>>,
     claims: Claims,
     Json(payload): Json<CreateRouteDto>,
-) -> Result<Json<Message<Vec<Route>>>, ApiError> {
-    let routes = services::routes::create_route(state, payload, claims.user_id).await?;
-    let message = if routes.len() > 1 {
-        "Routes created successfully (round trip)."
-    } else {
-        "Route created successfully."
-    };
-    let response = Message::context(message, routes);
+) -> Result<Json<Message<Route>>, ApiError> {
+    let route = services::routes::create_route(state, payload, claims.user_id).await?;
+    let response = Message::context("Route created successfully.", route);
     Ok(Json(response))
 }
 
-/// Search and filter scheduled routes
+/// Search and filter routes
 ///
-/// Retrieves scheduled transit routes with filters for origin, destination, ride type, and departure window.
+/// Retrieves transit routes with filters for origin, destination, and text search.
 ///
 /// ### Access Control
-/// - **Requires:** Bearer JWT (any authenticated role: `User`, `Admin`, `Driver`, etc.).
-///
-/// ### Query Parameters
-/// - `origin_id`: Filter by starting bus stop / terminal UUID.
-/// - `destination_id`: Filter by final destination terminal UUID.
-/// - `ride_type`: Filter by category (`Intercity`, `Intracity`, `Interstate`, `Campus`).
-/// - `page` & `limit`: Pagination controls.
+/// - **Requires:** Bearer JWT (any authenticated role).
 #[utoipa::path(
     get,
     path = "/routes",
@@ -122,10 +98,10 @@ pub async fn get_routes(
 
 /// Get route details by ID
 ///
-/// Retrieves full route specifications including origin, destination, intermediate stop waypoints, departure time, fare, and completion state.
+/// Retrieves full route specifications including origin, destination, intermediate stop waypoints, and fare.
 ///
 /// ### Access Control
-/// - **Requires:** Bearer JWT (any authenticated role: `User`, `Admin`, `Driver`, etc.).
+/// - **Requires:** Bearer JWT (any authenticated role).
 #[utoipa::path(
     get,
     path = "/routes/{route_id}",
@@ -150,7 +126,7 @@ pub async fn get_route_by_id(
 
 /// Update route details (Admin only)
 ///
-/// Updates timetable, fare, waypoints, or active status for an existing transit route.
+/// Updates fare, waypoints, or descriptive information for an existing transit route.
 ///
 /// ### Access Control
 /// - **Requires:** Bearer JWT with `Admin` or `Root` role.
@@ -183,13 +159,13 @@ pub async fn update_route(
 
 /// Delete a route (Admin only)
 ///
-/// Permanently deletes a scheduled route from the system.
+/// Permanently deletes a route definition from the system.
 ///
 /// ### Access Control
 /// - **Requires:** Bearer JWT with `Admin` or `Root` role.
 ///
 /// ### Constraints
-/// - Routes with existing passenger bookings or actively assigned buses cannot be deleted.
+/// - Routes with existing trips or active bookings cannot be deleted.
 #[utoipa::path(
     delete,
     path = "/routes/{route_id}",
@@ -198,7 +174,7 @@ pub async fn update_route(
     ),
     responses(
         (status = 200, description = "Route deleted successfully", body = Message<Route>),
-        (status = 400, description = "Bad request - Route has active bookings or buses assigned"),
+        (status = 400, description = "Bad request - Route has active trips or bookings"),
         (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
         (status = 403, description = "Forbidden - Admin or Root role required"),
         (status = 404, description = "Route not found")
@@ -212,35 +188,5 @@ pub async fn delete_route(
 ) -> Result<Json<Message<Route>>, ApiError> {
     let route = services::routes::delete_route(state, route_id, claims.user_id).await?;
     let response = Message::context("Route deleted successfully.", route);
-    Ok(Json(response))
-}
-
-/// Mark a route as completed (Admin only)
-///
-/// Concludes a route trip after the bus has safely reached the final terminal. Sets `is_completed = true` and records the `completed_at` timestamp.
-///
-/// ### Access Control
-/// - **Requires:** Bearer JWT with `Admin` or `Root` role.
-#[utoipa::path(
-    patch,
-    path = "/routes/{route_id}/complete",
-    params(
-        ("route_id" = Uuid, Path, description = "Unique UUID of the route to complete")
-    ),
-    responses(
-        (status = 200, description = "Route marked as completed successfully", body = Message<Route>),
-        (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
-        (status = 403, description = "Forbidden - Admin or Root role required"),
-        (status = 404, description = "Route not found")
-    ),
-    tag = "Routes"
-)]
-pub async fn complete_route(
-    State(state): State<Arc<AppState>>,
-    claims: Claims,
-    Path(route_id): Path<Uuid>,
-) -> Result<Json<Message<Route>>, ApiError> {
-    let route = services::routes::complete_route(state, route_id, claims.user_id).await?;
-    let response = Message::context("Route marked as completed successfully.", route);
     Ok(Json(response))
 }

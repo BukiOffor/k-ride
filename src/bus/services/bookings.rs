@@ -82,11 +82,20 @@ pub async fn create_booking(
             _ => ApiError::InternalError(e.to_string().into()),
         })?;
 
-    // 4. Verify bus is assigned to this route
-    if bus.current_route_id != Some(payload.route_id) {
+    // 4. Verify bus is assigned to a trip
+    if bus.current_trip_id.is_none() {
         return Err(ApiError::Error(
-            "Bus is not currently assigned to the specified route".into(),
+            "Bus is not currently assigned to any trip".into(),
         ));
+    }
+
+    // If a trip_id was specified, verify the bus is on that trip
+    if let Some(requested_trip_id) = payload.trip_id {
+        if bus.current_trip_id != Some(requested_trip_id) {
+            return Err(ApiError::Error(
+                "Bus is not currently assigned to the specified trip".into(),
+            ));
+        }
     }
 
     // 5. Verify bus availability
@@ -148,6 +157,7 @@ pub async fn create_booking(
         effective_user_id,
         payload.bus_id,
         payload.route_id,
+        payload.trip_id,
         assigned_seat,
     );
 

@@ -7,7 +7,6 @@ use string_validator::Validate;
 pub struct CreateBusDto {
     pub license_plate: String,
     pub capacity: i32,
-    pub current_route_id: Option<Uuid>,
     pub state: Option<BusState>,
     pub status: Option<BusStatus>,
 }
@@ -20,7 +19,7 @@ impl From<CreateBusDto> for Bus {
             license_plate: dto.license_plate,
             capacity: dto.capacity,
             current_passenger_count: 0,
-            current_route_id: dto.current_route_id,
+            current_trip_id: None,
             state: dto.state.unwrap_or(BusState::Stationary),
             status: dto.status.unwrap_or(BusStatus::Available),
             created_at: now,
@@ -35,7 +34,7 @@ pub struct UpdateBusDto {
     pub license_plate: Option<String>,
     pub capacity: Option<i32>,
     pub current_passenger_count: Option<i32>,
-    pub current_route_id: Option<Option<Uuid>>,
+    pub current_trip_id: Option<Option<Uuid>>,
     pub state: Option<BusState>,
     pub status: Option<BusStatus>,
 }
@@ -45,7 +44,7 @@ pub struct GetBusesQuery {
     pub search: Option<String>,
     pub status: Option<BusStatus>,
     pub state: Option<BusState>,
-    pub current_route_id: Option<Uuid>,
+    pub current_trip_id: Option<Uuid>,
     pub pagination: Option<Pagination>,
 }
 
@@ -55,13 +54,13 @@ pub struct ChangeBusStateDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct ChangeBusRouteDto {
-    pub route_id: Option<Uuid>,
+pub struct ChangeBusTripDto {
+    pub trip_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct AssignBusToRouteDto {
-    pub route_id: Uuid,
+pub struct AssignBusToTripDto {
+    pub trip_id: Uuid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

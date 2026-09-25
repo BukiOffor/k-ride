@@ -19,7 +19,7 @@ pub struct Bus {
     pub license_plate: String,
     pub capacity: i32,
     pub current_passenger_count: i32,
-    pub current_route_id: Option<Uuid>,
+    pub current_trip_id: Option<Uuid>,
     pub state: BusState,
     pub status: BusStatus,
     pub created_at: NaiveDateTime,

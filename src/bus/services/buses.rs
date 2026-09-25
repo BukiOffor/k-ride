@@ -74,8 +74,8 @@ pub async fn get_buses(
         query = query.filter(state.eq(bus_st));
     }
 
-    if let Some(route_id) = params.current_route_id {
-        query = query.filter(current_route_id.eq(route_id));
+    if let Some(trip) = params.current_trip_id {
+        query = query.filter(current_trip_id.eq(trip));
     }
 
     query = query.order(created_at.desc());
@@ -198,7 +198,7 @@ pub async fn reset_all_bus_routes(
     let count = diesel::update(buses)
         .set((
             current_passenger_count.eq(0),
-            current_route_id.eq(None::<Uuid>),
+            current_trip_id.eq(None::<Uuid>),
             updated_at.eq(chrono::Utc::now().naive_utc()),
         ))
         .execute(&mut conn)
@@ -256,10 +256,10 @@ pub async fn change_bus_state(
     Ok(updated_bus)
 }
 
-pub async fn change_bus_route(
+pub async fn change_bus_trip(
     app_state: Arc<AppState>,
     bus_id: Uuid,
-    new_route_id: Option<Uuid>,
+    new_trip_id: Option<Uuid>,
     user_id: Uuid,
 ) -> Result<Bus, ApiError> {
     use crate::schema::buses::dsl::*;
@@ -270,27 +270,24 @@ pub async fn change_bus_route(
         .await
         .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
 
-    if let Some(r_id) = new_route_id {
-        use crate::schema::routes::dsl as routes_dsl;
-        let route = routes_dsl::routes
-            .filter(routes_dsl::id.eq(r_id))
-            .first::<crate::bus::models::routes::Route>(&mut conn)
+    // Validate trip exists if provided
+    if let Some(t_id) = new_trip_id {
+        use crate::schema::trips::dsl as trips_dsl;
+        trips_dsl::trips
+            .filter(trips_dsl::id.eq(t_id))
+            .first::<crate::bus::models::trips::Trip>(&mut conn)
             .await
             .map_err(|e| match e {
                 diesel::result::Error::NotFound => {
-                    ApiError::NotFoundError("Route not found".into())
+                    ApiError::NotFoundError("Trip not found".into())
                 }
                 _ => ApiError::InternalError(e.to_string().into()),
             })?;
-
-        if route.is_completed {
-            return Err(ApiError::BadRequest("Cannot assign bus to a completed route"));
-        }
     }
 
     let updated_bus = diesel::update(buses.filter(id.eq(bus_id)))
         .set((
-            current_route_id.eq(new_route_id),
+            current_trip_id.eq(new_trip_id),
             updated_at.eq(chrono::Utc::now().naive_utc()),
         ))
         .get_result::<Bus>(&mut conn)
@@ -304,7 +301,7 @@ pub async fn change_bus_route(
     log.set_target_id(bus_id);
     log.set_target_type("Bus".to_string());
     log.set_details(serde_json::json!({
-        "new_route_id": new_route_id
+        "new_trip_id": new_trip_id
     }));
     if let Err(e) = app_state.logger.try_send(log) {
         tracing::warn!("Failed to queue activity log: {}", e);
@@ -368,7 +365,7 @@ pub async fn reset_bus(
     let updated_bus = diesel::update(buses.filter(id.eq(bus_id)))
         .set((
             current_passenger_count.eq(0),
-            current_route_id.eq(None::<Uuid>),
+            current_trip_id.eq(None::<Uuid>),
             state.eq(BusState::Stationary),
             status.eq(BusStatus::Available),
             updated_at.eq(chrono::Utc::now().naive_utc()),
@@ -517,7 +514,7 @@ pub async fn clear_bus_allocation(
 
     let updated_bus = diesel::update(buses.filter(id.eq(bus_id)))
         .set((
-            current_route_id.eq(None::<Uuid>),
+            current_trip_id.eq(None::<Uuid>),
             current_passenger_count.eq(0),
             updated_at.eq(chrono::Utc::now().naive_utc()),
         ))
@@ -541,14 +538,14 @@ pub async fn clear_bus_allocation(
     Ok(updated_bus)
 }
 
-pub async fn assign_bus_to_route(
+pub async fn assign_bus_to_trip(
     app_state: Arc<AppState>,
     bus_id: Uuid,
-    route_id: Uuid,
+    trip_id: Uuid,
     user_id: Uuid,
 ) -> Result<Bus, ApiError> {
     use crate::schema::buses::dsl::*;
-    use crate::schema::routes::dsl as routes_dsl;
+    use crate::schema::trips::dsl as trips_dsl;
 
     let mut conn = app_state
         .pool
@@ -568,30 +565,24 @@ pub async fn assign_bus_to_route(
 
     if bus.status == BusStatus::Maintenance {
         return Err(ApiError::BadRequest(
-            "Cannot assign route to a bus currently under maintenance",
+            "Cannot assign trip to a bus currently under maintenance",
         ));
     }
 
-    // 2. Verify route exists and is not completed
-    let route = routes_dsl::routes
-        .filter(routes_dsl::id.eq(route_id))
-        .first::<crate::bus::models::routes::Route>(&mut conn)
+    // 2. Verify trip exists
+    trips_dsl::trips
+        .filter(trips_dsl::id.eq(trip_id))
+        .first::<crate::bus::models::trips::Trip>(&mut conn)
         .await
         .map_err(|e| match e {
-            diesel::result::Error::NotFound => ApiError::NotFoundError("Route not found".into()),
+            diesel::result::Error::NotFound => ApiError::NotFoundError("Trip not found".into()),
             _ => ApiError::InternalError(e.to_string().into()),
         })?;
 
-    if route.is_completed {
-        return Err(ApiError::BadRequest(
-            "Cannot assign bus to a completed route",
-        ));
-    }
-
-    // 3. Update the bus with the route assignment
+    // 3. Update the bus with the trip assignment
     let updated_bus = diesel::update(buses.filter(id.eq(bus_id)))
         .set((
-            current_route_id.eq(Some(route_id)),
+            current_trip_id.eq(Some(trip_id)),
             updated_at.eq(chrono::Utc::now().naive_utc()),
         ))
         .get_result::<Bus>(&mut conn)
@@ -601,13 +592,23 @@ pub async fn assign_bus_to_route(
             _ => ApiError::InternalError(e.to_string().into()),
         })?;
 
-    // 4. Log activity
+    // 4. Also update the trip's bus_id field
+    diesel::update(trips_dsl::trips.filter(trips_dsl::id.eq(trip_id)))
+        .set((
+            trips_dsl::bus_id.eq(Some(bus_id)),
+            trips_dsl::updated_at.eq(chrono::Utc::now().naive_utc()),
+        ))
+        .execute(&mut conn)
+        .await
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    // 5. Log activity
     let mut log = ActivityLog::new(ActivityType::BusRouteChanged, user_id);
     log.set_target_id(bus_id);
     log.set_target_type("Bus".to_string());
     log.set_details(serde_json::json!({
-        "route_id": route_id,
-        "action": "assign_route"
+        "trip_id": trip_id,
+        "action": "assign_trip"
     }));
     if let Err(e) = app_state.logger.try_send(log) {
         tracing::warn!("Failed to queue activity log: {}", e);
