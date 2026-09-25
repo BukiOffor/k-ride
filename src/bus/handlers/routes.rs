@@ -34,7 +34,7 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
             "/{route_id}/complete",
             patch(complete_route).route_layer(middleware::from_fn_with_state(
                 state.clone(),
-                crate::auth::middleware::admin_authorize,
+                crate::auth::middleware::coordinator_authorize,
             )),
         )
         .layer(ServiceBuilder::new().layer(middleware::from_fn_with_state(

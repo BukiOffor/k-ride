@@ -16,7 +16,7 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
             get(get_bookings)
                 .route_layer(middleware::from_fn_with_state(
                     state.clone(),
-                    crate::auth::middleware::admin_authorize,
+                    crate::auth::middleware::coordinator_authorize,
                 ))
                 .post(create_booking),
         )
@@ -32,7 +32,7 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
             "/{booking_id}/board",
             patch(board_passenger).route_layer(middleware::from_fn_with_state(
                 state.clone(),
-                crate::auth::middleware::admin_authorize,
+                crate::auth::middleware::coordinator_authorize,
             )),
         )
         .route(
@@ -46,7 +46,7 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
             "/verify",
             post(verify_booking_qr).route_layer(middleware::from_fn_with_state(
                 state.clone(),
-                crate::auth::middleware::admin_authorize,
+                crate::auth::middleware::coordinator_authorize,
             )),
         )
         .layer(ServiceBuilder::new().layer(middleware::from_fn_with_state(
