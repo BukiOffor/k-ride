@@ -76,7 +76,7 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
     request_body = CreateBookingDto,
     responses(
         (status = 200, description = "Booking created successfully", body = Message<Booking>),
-        (status = 400, description = "Bad request - Bus is at maximum capacity, seat is already taken, or invalid parameters"),
+        (status = 400, description = "Bad request - User already has an active booking for this route, bus is at maximum capacity, seat is already taken, or invalid parameters"),
         (status = 401, description = "Unauthorized - Missing or invalid authentication token"),
         (status = 404, description = "Route or bus not found")
     ),

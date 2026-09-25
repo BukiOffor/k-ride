@@ -55,7 +55,24 @@ pub async fn create_booking(
             _ => ApiError::InternalError(e.to_string().into()),
         })?;
 
-    // 3. Validate bus existence and status
+    // 3. Verify user does not already have an active booking for this route
+    let existing_booking = bookings_dsl::bookings
+        .filter(bookings_dsl::user_id.eq(effective_user_id))
+        .filter(bookings_dsl::route_id.eq(payload.route_id))
+        .filter(bookings_dsl::status.ne(BookingStatus::Cancelled))
+        .filter(bookings_dsl::status.ne(BookingStatus::Revoked))
+        .first::<Booking>(&mut conn)
+        .await
+        .optional()
+        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+    if existing_booking.is_some() {
+        return Err(ApiError::Error(
+            "User already has an active booking for this route".into(),
+        ));
+    }
+
+    // 4. Validate bus existence and status
     let bus = buses_dsl::buses
         .filter(buses_dsl::id.eq(payload.bus_id))
         .first::<Bus>(&mut conn)
@@ -279,9 +296,15 @@ pub async fn board_passenger(
             _ => ApiError::InternalError(e.to_string().into()),
         })?;
 
+    if booking.status == BookingStatus::Boarded {
+        return Err(ApiError::Error(
+            "This booking has already been boarded".into(),
+        ));
+    }
+
     if booking.status == BookingStatus::Cancelled || booking.status == BookingStatus::Revoked {
         return Err(ApiError::Error(
-            "Cannot board a cancelled or revoked booking".into(),
+            "This booking has already been cancelled or revoked".into(),
         ));
     }
 
