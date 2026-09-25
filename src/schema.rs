@@ -111,6 +111,17 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    ride_requests (id) {
+        id -> Uuid,
+        route_id -> Uuid,
+        count -> Integer,
+        departure_date -> Date,
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(
     users,
     buses,
@@ -118,5 +129,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     routes,
     activity_logs,
     bookings,
-    trips
+    trips,
+    ride_requests
 );
+

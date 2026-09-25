@@ -45,6 +45,10 @@ use utoipa::OpenApi;
         super::handlers::bookings::update_payment_status,
         super::handlers::bookings::get_booking_qr,
         super::handlers::bookings::verify_booking_qr,
+        super::handlers::ride_request::request_ride,
+        super::handlers::ride_request::get_ride_requests,
+        super::handlers::ride_request::get_ride_request_by_id,
+        super::handlers::ride_request::delete_ride_request,
     ),
     components(schemas(
         super::dtos::points::CreatePointDto,
@@ -86,6 +90,9 @@ use utoipa::OpenApi;
         super::models::bookings::Booking,
         super::models::bookings::BookingStatus,
         super::models::bookings::PaymentStatus,
+        super::dtos::ride_request::CreateRideRequestDto,
+        super::dtos::ride_request::GetRideRequestsQuery,
+        super::models::ride_request::RideRequest,
     ))
 )]
 pub struct BusApiDoc;
@@ -94,3 +101,5 @@ pub type PointsApiDoc = BusApiDoc;
 pub type RoutesApiDoc = BusApiDoc;
 pub type TripsApiDoc = BusApiDoc;
 pub type BookingsApiDoc = BusApiDoc;
+pub type RideRequestsApiDoc = BusApiDoc;
+
