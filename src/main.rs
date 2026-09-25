@@ -61,6 +61,8 @@ async fn main() {
         .allow_origin([
             "http://localhost:3000".parse::<HeaderValue>().unwrap(),
             "http://localhost:5173".parse::<HeaderValue>().unwrap(),
+            "https://app.freebus.cloud".parse::<HeaderValue>().unwrap(),
+            "https://freebus.cloud".parse::<HeaderValue>().unwrap(),
             "https://ktvn-beryl.vercel.app".parse::<HeaderValue>().unwrap()
 
         ]);
