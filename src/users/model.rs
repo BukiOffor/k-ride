@@ -22,6 +22,7 @@ pub struct User {
     pub username: String,
     pub phone: String,
     pub address: String,
+    pub city: String,
     pub country: String,
     pub identity_type: Option<String>,
     pub identity_number: Option<String>,

@@ -9,6 +9,7 @@ diesel::table! {
         username -> Text,
         phone -> Text,
         address -> Text,
+        city -> Text,
         country -> Text,
         identity_type -> Nullable<Text>,
         identity_number -> Nullable<Text>,

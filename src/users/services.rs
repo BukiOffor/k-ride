@@ -348,6 +348,7 @@ pub async fn seed_root_user(state: Arc<AppState>) -> Result<(), ApiError> {
         username: root_username.clone(),
         phone: root_phone,
         address: "System Headquarters".to_string(),
+        city: "Abuja".to_string(),
         country: "Nigeria".to_string(),
         identity_type: None,
         identity_number: None,
