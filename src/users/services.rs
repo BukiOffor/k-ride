@@ -329,9 +329,9 @@ pub async fn seed_root_user(state: Arc<AppState>) -> Result<(), ApiError> {
     }
 
     // Read root user credentials from environment or fall back to defaults
-    let root_email = std::env::var("ROOT_EMAIL").unwrap_or_else(|_| "root@freebus.com".to_string());
+    let root_email = std::env::var("ROOT_EMAIL").unwrap_or_else(|_| "root@freebus.cloud".to_string());
     let root_username = std::env::var("ROOT_USERNAME").unwrap_or_else(|_| "root".to_string());
-    let root_password = std::env::var("ROOT_PASSWORD").unwrap_or_else(|_| "iamroot".to_string());
+    let root_password = std::env::var("ROOT_PASSWORD").unwrap_or_else(|_| "@iamroot".to_string());
     let root_phone = std::env::var("ROOT_PHONE").unwrap_or_else(|_| "+2348000000000".to_string());
     let root_first_name = std::env::var("ROOT_FIRST_NAME").unwrap_or_else(|_| "System".to_string());
     let root_last_name = std::env::var("ROOT_LAST_NAME").unwrap_or_else(|_| "Root".to_string());
@@ -349,8 +349,8 @@ pub async fn seed_root_user(state: Arc<AppState>) -> Result<(), ApiError> {
         phone: root_phone,
         address: "System Headquarters".to_string(),
         country: "Nigeria".to_string(),
-        identity_type: Some("System".to_string()),
-        identity_number: Some("ROOT-001".to_string()),
+        identity_type: None,
+        identity_number: None,
         password_hash: hashed_password,
         is_identity_verified: true,
         role: RoleType::Root,
