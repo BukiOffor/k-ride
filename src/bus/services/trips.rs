@@ -59,6 +59,18 @@ pub async fn create_trip(
         .await
         .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
 
+    if let Some(target_bus_id) = payload.bus_id {
+        use crate::schema::buses::dsl as buses_dsl;
+        diesel::update(buses_dsl::buses.filter(buses_dsl::id.eq(target_bus_id)))
+            .set((
+                buses_dsl::current_trip_id.eq(Some(inserted_trip.id)),
+                buses_dsl::updated_at.eq(now),
+            ))
+            .execute(&mut conn)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+    }
+
     let mut log = ActivityLog::new(ActivityType::TripCreated, user_id);
     log.set_target_id(inserted_trip.id);
     log.set_target_type("Trip".to_string());
