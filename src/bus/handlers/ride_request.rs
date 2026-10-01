@@ -11,10 +11,7 @@ pub fn routes(state: Arc<AppState>) -> Router {
 
 pub fn module_routes(state: Arc<AppState>) -> Router {
     Router::new()
-        .route(
-            "/",
-            post(request_ride).get(get_ride_requests),
-        )
+        .route("/", post(request_ride).get(get_ride_requests))
         .route(
             "/{ride_request_id}",
             delete(delete_ride_request)
@@ -54,12 +51,9 @@ pub async fn request_ride(
     claims: Claims,
     Json(payload): Json<CreateRideRequestDto>,
 ) -> Result<Json<Message<RideRequest>>, ApiError> {
-    let request = services::ride_request::create_or_increment_ride_request(
-        state,
-        payload,
-        claims.user_id,
-    )
-    .await?;
+    let request =
+        services::ride_request::create_or_increment_ride_request(state, payload, claims.user_id)
+            .await?;
     let response = Message::context("Ride request submitted successfully.", request);
     Ok(Json(response))
 }
@@ -139,8 +133,7 @@ pub async fn delete_ride_request(
     Path(ride_request_id): Path<Uuid>,
 ) -> Result<Json<Message<RideRequest>>, ApiError> {
     let request =
-        services::ride_request::delete_ride_request(state, ride_request_id, claims.user_id)
-            .await?;
+        services::ride_request::delete_ride_request(state, ride_request_id, claims.user_id).await?;
     let response = Message::context("Ride request deleted successfully.", request);
     Ok(Json(response))
 }

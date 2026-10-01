@@ -159,6 +159,9 @@ pub async fn create_booking(
         payload.route_id,
         payload.trip_id,
         assigned_seat,
+        payload.pickup_point,
+        payload.dropoff_point,
+        payload.num_of_kids,
     );
 
     if route.fare == 0.0 {
@@ -700,9 +703,9 @@ pub async fn verify_booking_qr(
     }
 
     // Parse booking ID
-    let booking_id: Uuid = booking_id_str.parse().map_err(|_| {
-        ApiError::Error("Invalid booking_id in QR code".into())
-    })?;
+    let booking_id: Uuid = booking_id_str
+        .parse()
+        .map_err(|_| ApiError::Error("Invalid booking_id in QR code".into()))?;
 
     // Look up the booking
     let mut conn = state
@@ -779,9 +782,8 @@ fn compute_hmac_signature(
 
     type HmacSha256 = Hmac<Sha256>;
 
-    let secret = std::env::var("QR_SIGNING_SECRET").unwrap_or_else(|_| {
-        std::env::var("JWT_SECRET").expect("JWT_SECRET must be set")
-    });
+    let secret = std::env::var("QR_SIGNING_SECRET")
+        .unwrap_or_else(|_| std::env::var("JWT_SECRET").expect("JWT_SECRET must be set"));
 
     let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
         .map_err(|e| ApiError::InternalError(format!("HMAC error: {}", e).into()))?;

@@ -84,10 +84,7 @@ pub async fn create_trip(
     Ok(inserted_trip)
 }
 
-pub async fn get_trips(
-    state: Arc<AppState>,
-    params: GetTripsQuery,
-) -> Result<Vec<Trip>, ApiError> {
+pub async fn get_trips(state: Arc<AppState>, params: GetTripsQuery) -> Result<Vec<Trip>, ApiError> {
     use crate::schema::trips::dsl::*;
 
     let mut conn = state
@@ -346,18 +343,13 @@ pub async fn cancel_trip(
         })?;
 
     if trip.status == TripStatus::Completed {
-        return Err(ApiError::Error(
-            "Cannot cancel a completed trip".into(),
-        ));
+        return Err(ApiError::Error("Cannot cancel a completed trip".into()));
     }
 
     let now = chrono::Utc::now().naive_utc();
 
     let updated_trip = diesel::update(trips.filter(id.eq(trip_id)))
-        .set((
-            status.eq(TripStatus::Cancelled),
-            updated_at.eq(now),
-        ))
+        .set((status.eq(TripStatus::Cancelled), updated_at.eq(now)))
         .get_result::<Trip>(&mut conn)
         .await
         .map_err(|e| ApiError::InternalError(e.to_string().into()))?;

@@ -1,6 +1,6 @@
 use super::*;
-use chrono::NaiveDate;
 use crate::types::Pagination;
+use chrono::NaiveDate;
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateRideRequestDto {

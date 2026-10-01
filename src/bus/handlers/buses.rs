@@ -44,11 +44,10 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
         )
         .route(
             "/{bus_id}/trip",
-            patch(change_bus_trip)
-                .route_layer(middleware::from_fn_with_state(
-                    state.clone(),
-                    crate::auth::middleware::admin_authorize,
-                )),
+            patch(change_bus_trip).route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                crate::auth::middleware::admin_authorize,
+            )),
         )
         .route(
             "/{bus_id}/assign-trip",
@@ -517,8 +516,7 @@ pub async fn assign_bus_to_trip(
     Json(payload): Json<AssignBusToTripDto>,
 ) -> Result<Json<Message<Bus>>, ApiError> {
     let bus =
-        services::buses::assign_bus_to_trip(state, bus_id, payload.trip_id, claims.user_id)
-            .await?;
+        services::buses::assign_bus_to_trip(state, bus_id, payload.trip_id, claims.user_id).await?;
     let response = Message::context("Bus assigned to trip successfully.", bus);
     Ok(Json(response))
 }

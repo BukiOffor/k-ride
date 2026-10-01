@@ -329,7 +329,8 @@ pub async fn seed_root_user(state: Arc<AppState>) -> Result<(), ApiError> {
     }
 
     // Read root user credentials from environment or fall back to defaults
-    let root_email = std::env::var("ROOT_EMAIL").unwrap_or_else(|_| "root@freebus.cloud".to_string());
+    let root_email =
+        std::env::var("ROOT_EMAIL").unwrap_or_else(|_| "root@freebus.cloud".to_string());
     let root_username = std::env::var("ROOT_USERNAME").unwrap_or_else(|_| "root".to_string());
     let root_password = std::env::var("ROOT_PASSWORD").unwrap_or_else(|_| "@iamroot".to_string());
     let root_phone = std::env::var("ROOT_PHONE").unwrap_or_else(|_| "+2348000000000".to_string());

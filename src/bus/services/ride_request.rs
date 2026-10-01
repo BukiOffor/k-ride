@@ -45,16 +45,14 @@ pub async fn create_or_increment_ride_request(
     let now = chrono::Utc::now().naive_utc();
 
     let result = match existing {
-        Some(existing_req) => {
-            diesel::update(ride_requests.filter(id.eq(existing_req.id)))
-                .set((
-                    count.eq(existing_req.count + request_count),
-                    updated_at.eq(now),
-                ))
-                .get_result::<RideRequest>(&mut conn)
-                .await
-                .map_err(|e| ApiError::InternalError(e.to_string().into()))?
-        }
+        Some(existing_req) => diesel::update(ride_requests.filter(id.eq(existing_req.id)))
+            .set((
+                count.eq(existing_req.count + request_count),
+                updated_at.eq(now),
+            ))
+            .get_result::<RideRequest>(&mut conn)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?,
         None => {
             let new_request = RideRequest {
                 id: Uuid::now_v7(),

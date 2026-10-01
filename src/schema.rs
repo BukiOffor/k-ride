@@ -92,6 +92,9 @@ diesel::table! {
         updated_at -> Timestamp,
         qr_code -> Nullable<Text>,
         trip_id -> Nullable<Uuid>,
+        pickup_point -> Nullable<Uuid>,
+        dropoff_point -> Nullable<Uuid>,
+        num_of_kids -> Integer,
     }
 }
 
@@ -133,4 +136,3 @@ diesel::allow_tables_to_appear_in_same_query!(
     trips,
     ride_requests
 );
-

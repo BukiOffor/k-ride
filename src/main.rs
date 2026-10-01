@@ -63,8 +63,9 @@ async fn main() {
             "http://localhost:5173".parse::<HeaderValue>().unwrap(),
             "https://app.freebus.cloud".parse::<HeaderValue>().unwrap(),
             "https://freebus.cloud".parse::<HeaderValue>().unwrap(),
-            "https://ktvn-beryl.vercel.app".parse::<HeaderValue>().unwrap()
-
+            "https://ktvn-beryl.vercel.app"
+                .parse::<HeaderValue>()
+                .unwrap(),
         ]);
 
     k_rides::config::start_log_workers(state.clone(), logger_receiver, 2).await;
@@ -85,8 +86,7 @@ async fn main() {
     openapi.merge(LogsApiDoc::openapi());
 
     let api = axum::Router::new()
-        .merge(SwaggerUi::new("/swagger-ui")
-        .url("/api-docs/openapi.json", openapi))
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi))
         .nest("/api/v1", app);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:9990").await.unwrap();

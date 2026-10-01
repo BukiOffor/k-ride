@@ -9,6 +9,9 @@ pub struct CreateBookingDto {
     pub trip_id: Option<Uuid>,
     pub seat_number: Option<i32>,
     pub user_id: Option<Uuid>,
+    pub pickup_point: Option<Uuid>,
+    pub dropoff_point: Option<Uuid>,
+    pub num_of_kids: i32, 
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

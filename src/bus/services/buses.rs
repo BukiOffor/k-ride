@@ -278,9 +278,7 @@ pub async fn change_bus_trip(
             .first::<crate::bus::models::trips::Trip>(&mut conn)
             .await
             .map_err(|e| match e {
-                diesel::result::Error::NotFound => {
-                    ApiError::NotFoundError("Trip not found".into())
-                }
+                diesel::result::Error::NotFound => ApiError::NotFoundError("Trip not found".into()),
                 _ => ApiError::InternalError(e.to_string().into()),
             })?;
     }

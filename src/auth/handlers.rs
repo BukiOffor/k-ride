@@ -112,17 +112,14 @@ pub async fn refresh(
     headers: HeaderMap,
     payload: Option<Json<RefreshTokenPayload>>,
 ) -> Result<(CookieJar, Json<Message<LoginResponseDto>>), ModuleError> {
-    let token_str = payload
-        .and_then(|Json(p)| p.refresh_token)
-        .or_else(|| {
-            headers
-                .get(axum::http::header::AUTHORIZATION)
-                .and_then(|h| h.to_str().ok())
-                .map(|s| s.strip_prefix("Bearer ").unwrap_or(s).trim().to_string())
-        });
+    let token_str = payload.and_then(|Json(p)| p.refresh_token).or_else(|| {
+        headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.strip_prefix("Bearer ").unwrap_or(s).trim().to_string())
+    });
 
     let (jar, response) = service::refresh(jar, state.pool.clone(), token_str).await?;
     let message = Message::context("Session refreshed successfully.", response);
     Ok((jar, Json(message)))
 }
-

@@ -363,9 +363,8 @@ pub async fn get_booking_qr(
     Path(booking_id): Path<Uuid>,
 ) -> Result<Json<Message<BookingQrCodeResponse>>, ApiError> {
     let is_admin = matches!(claims.role, RoleType::Admin | RoleType::Root);
-    let qr =
-        services::bookings::generate_booking_qr(state, booking_id, claims.user_id, is_admin)
-            .await?;
+    let qr = services::bookings::generate_booking_qr(state, booking_id, claims.user_id, is_admin)
+        .await?;
     let response = Message::context("QR code generated successfully.", qr);
     Ok(Json(response))
 }

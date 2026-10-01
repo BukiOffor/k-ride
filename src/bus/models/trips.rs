@@ -1,5 +1,5 @@
-use super::*;
 use super::routes::RideType;
+use super::*;
 
 #[derive(
     Debug,
@@ -29,7 +29,6 @@ pub struct Trip {
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
 }
-
 
 #[derive(
     Debug,

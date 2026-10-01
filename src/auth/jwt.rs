@@ -91,8 +91,11 @@ where
     type Rejection = ModuleError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let token = if let Some(auth_header) = parts.headers.get(axum::http::header::AUTHORIZATION) {
-            let auth_str = auth_header.to_str().map_err(|_| ModuleError::InvalidToken)?;
+        let token = if let Some(auth_header) = parts.headers.get(axum::http::header::AUTHORIZATION)
+        {
+            let auth_str = auth_header
+                .to_str()
+                .map_err(|_| ModuleError::InvalidToken)?;
             if let Some(bearer_token) = auth_str.strip_prefix("Bearer ") {
                 Some(bearer_token.trim().to_string())
             } else {
@@ -103,7 +106,8 @@ where
                 .await
                 .map_err(|_| ModuleError::InternalError("Could not extract cookies".into()))?;
 
-            jar.get("access_token").map(|cookie| cookie.value().to_string())
+            jar.get("access_token")
+                .map(|cookie| cookie.value().to_string())
         };
 
         let token = token.ok_or(ModuleError::CouldNotExtractToken(

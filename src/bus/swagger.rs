@@ -102,4 +102,3 @@ pub type RoutesApiDoc = BusApiDoc;
 pub type TripsApiDoc = BusApiDoc;
 pub type BookingsApiDoc = BusApiDoc;
 pub type RideRequestsApiDoc = BusApiDoc;
-

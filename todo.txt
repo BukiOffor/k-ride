@@ -1,0 +1,6 @@
+schedule round trip
+flip the trip
+at the point of marking a trip as completed, reasign the bus to the return trip
+
+
+add num of kids to an adult pass and increase bus seats 

@@ -21,4 +21,3 @@ pub mod swagger;
 
 pub use dto::*;
 pub use model::*;
-
