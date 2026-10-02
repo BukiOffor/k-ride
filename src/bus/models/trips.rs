@@ -28,6 +28,7 @@ pub struct Trip {
     pub status: TripStatus,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
+    pub return_time: Option<chrono::NaiveDateTime>,
 }
 
 #[derive(

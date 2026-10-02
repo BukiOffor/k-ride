@@ -112,6 +112,7 @@ diesel::table! {
         status -> Text,
         created_at -> Timestamp,
         updated_at -> Timestamp,
+        return_time -> Nullable<Timestamp>,
     }
 }
 

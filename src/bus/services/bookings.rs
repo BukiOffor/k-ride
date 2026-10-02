@@ -168,6 +168,7 @@ pub async fn create_booking(
         new_booking.payment_status = PaymentStatus::Free;
     }
 
+
     // 10. Generate QR code and attach it before insert
     let qr_payload = build_signed_qr_payload(&new_booking)?;
     let qr_base64 = render_qr_to_base64(&qr_payload)?;
@@ -199,6 +200,140 @@ pub async fn create_booking(
     }
     if let Err(e) = state.logger.try_send(log) {
         tracing::warn!("Failed to queue activity log: {}", e);
+    }
+
+    // 14. Find return trip if any and create booking for it also automatically
+    if payload.return_trip {
+        let return_booking_result: Result<(), ApiError> = async {
+            use crate::schema::trips::dsl as trips_dsl;
+
+            // Load the trip this booking is on
+            let trip = trips_dsl::trips
+                .filter(trips_dsl::id.eq(bus.current_trip_id.ok_or_else(|| {
+                    ApiError::Error("Bus has no current trip for return booking".into())
+                })?))
+                .first::<Trip>(&mut conn)
+                .await
+                .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+            // Only proceed if the trip is a RoundTrip
+            if trip.ride_type != RideType::RoundTrip {
+                return Err(ApiError::Error(
+                    "Return booking requested but the trip is not a round trip".into(),
+                ));
+            }
+
+            // Find the reverse route (start_point <-> end_point swapped)
+            let reverse_route = routes_dsl::routes
+                .filter(routes_dsl::start_point.eq(route.end_point))
+                .filter(routes_dsl::end_point.eq(route.start_point))
+                .first::<Route>(&mut conn)
+                .await
+                .optional()
+                .map_err(|e| ApiError::InternalError(e.to_string().into()))?
+                .ok_or_else(|| {
+                    ApiError::NotFoundError("No reverse route found for return trip".into())
+                })?;
+
+            // Find the return trip: same bus, on the reverse route, not yet started,
+            // departing after the current trip's arrival
+            let return_trip = trips_dsl::trips
+                .filter(trips_dsl::bus_id.eq(payload.bus_id))
+                .filter(trips_dsl::route_id.eq(reverse_route.id))
+                .filter(trips_dsl::status.eq(TripStatus::NotStarted))
+                .filter(trips_dsl::departure_time.gt(trip.arrival_time))
+                .order(trips_dsl::departure_time.asc())
+                .first::<Trip>(&mut conn)
+                .await
+                .optional()
+                .map_err(|e| ApiError::InternalError(e.to_string().into()))?
+                .ok_or_else(|| {
+                    ApiError::NotFoundError("No return trip found for this bus".into())
+                })?;
+
+            // Check that the user doesn't already have an active booking on the return route
+            let existing_return = bookings_dsl::bookings
+                .filter(bookings_dsl::user_id.eq(effective_user_id))
+                .filter(bookings_dsl::route_id.eq(reverse_route.id))
+                .filter(bookings_dsl::status.ne(BookingStatus::Cancelled))
+                .filter(bookings_dsl::status.ne(BookingStatus::Revoked))
+                .first::<Booking>(&mut conn)
+                .await
+                .optional()
+                .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+            if existing_return.is_some() {
+                return Err(ApiError::Error(
+                    "User already has an active booking for the return route".into(),
+                ));
+            }
+
+            // Load booked seats on the return trip's bus to assign a seat
+            let return_active_bookings = bookings_dsl::bookings
+                .filter(bookings_dsl::bus_id.eq(payload.bus_id))
+                .filter(bookings_dsl::trip_id.eq(return_trip.id))
+                .filter(bookings_dsl::status.ne(BookingStatus::Cancelled))
+                .filter(bookings_dsl::status.ne(BookingStatus::Revoked))
+                .select(bookings_dsl::seat_number)
+                .load::<i32>(&mut conn)
+                .await
+                .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+            let return_booked_set: HashSet<i32> = return_active_bookings.iter().cloned().collect();
+
+            let return_seat: i32 = (1..=bus.capacity)
+                .find(|s| !return_booked_set.contains(s))
+                .ok_or_else(|| {
+                    ApiError::Error("No available seats on the return trip bus".into())
+                })?;
+
+            // Build return booking with swapped pickup/dropoff points
+            let mut return_booking = Booking::new(
+                effective_user_id,
+                payload.bus_id,
+                reverse_route.id,
+                Some(return_trip.id),
+                return_seat,
+                payload.dropoff_point, // swap: original dropoff becomes return pickup
+                payload.pickup_point,  // swap: original pickup becomes return dropoff
+                payload.num_of_kids,
+            );
+
+            if reverse_route.fare == 0.0 {
+                return_booking.payment_status = PaymentStatus::Free;
+            }
+
+            // Generate QR code for return booking
+            let return_qr_payload = build_signed_qr_payload(&return_booking)?;
+            let return_qr_base64 = render_qr_to_base64(&return_qr_payload)?;
+            return_booking.qr_code = Some(return_qr_base64);
+
+            // Insert return booking
+            let created_return = diesel::insert_into(bookings_dsl::bookings)
+                .values(&return_booking)
+                .get_result::<Booking>(&mut conn)
+                .await
+                .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+            // Emit activity log for return booking
+            let mut return_log =
+                ActivityLog::new(ActivityType::BookingCreated, current_user_id);
+            return_log.set_target_id(created_return.id);
+            return_log.set_target_type("Booking".to_string());
+            if let Ok(details) = serde_json::to_value(&created_return) {
+                return_log.set_details(details);
+            }
+            if let Err(e) = state.logger.try_send(return_log) {
+                tracing::warn!("Failed to queue return booking activity log: {}", e);
+            }
+
+            Ok(())
+        }
+        .await;
+
+        if let Err(e) = return_booking_result {
+            tracing::warn!("Failed to create return trip booking: {}", e);
+        }
     }
 
     Ok(created_booking)

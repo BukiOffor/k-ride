@@ -11,6 +11,7 @@ pub struct CreateTripDto {
     pub departure_time: NaiveDateTime,
     pub arrival_time: NaiveDateTime,
     pub ride_type: RideType,
+    pub return_time: Option<NaiveDateTime>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema, AsChangeset, Default)]

@@ -1,7 +1,8 @@
 use super::*;
-use crate::bus::models::routes::Route;
+use crate::bus::models::routes::{RideType, Route};
 use crate::bus::models::trips::{Trip, TripStatus};
 use crate::logs::{ActivityLog, ActivityType};
+use diesel::OptionalExtension;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use std::sync::Arc;
@@ -21,7 +22,7 @@ pub async fn create_trip(
         .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
 
     // Validate route exists
-    routes_dsl::routes
+    let route = routes_dsl::routes
         .filter(routes_dsl::id.eq(payload.route_id))
         .first::<Route>(&mut conn)
         .await
@@ -34,6 +35,18 @@ pub async fn create_trip(
         return Err(ApiError::Error(
             "Arrival time must be after departure time".into(),
         ));
+    }
+
+    if payload.ride_type == RideType::RoundTrip {
+        let ret_time = payload.return_time.ok_or_else(|| {
+            ApiError::Error("Return time is required for round trips".into())
+        })?;
+
+        if ret_time <= payload.arrival_time {
+            return Err(ApiError::Error(
+                "Return time must be after arrival time".into(),
+            ));
+        }
     }
 
     let now = chrono::Utc::now().naive_utc();
@@ -51,6 +64,7 @@ pub async fn create_trip(
         status: TripStatus::NotStarted,
         created_at: now,
         updated_at: now,
+        return_time: payload.return_time,
     };
 
     let inserted_trip = diesel::insert_into(trips)
@@ -79,6 +93,83 @@ pub async fn create_trip(
     }
     if let Err(e) = state.logger.try_send(log) {
         tracing::warn!("Failed to queue activity log: {}", e);
+    }
+
+    // if trip is of round trip, add a return trip 
+    if payload.ride_type == RideType::RoundTrip {
+        let return_departure = payload.return_time.unwrap();
+        let trip_duration = payload.arrival_time - payload.departure_time;
+        let return_arrival = return_departure + trip_duration;
+
+        // Find or create reverse route
+        let reverse_route = routes_dsl::routes
+            .filter(routes_dsl::start_point.eq(route.end_point))
+            .filter(routes_dsl::end_point.eq(route.start_point))
+            .first::<Route>(&mut conn)
+            .await
+            .optional()
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+        let return_route_id = match reverse_route {
+            Some(r) => r.id,
+            None => {
+                let mut return_stops = route.stops.clone();
+                return_stops.reverse();
+
+                let new_route = Route {
+                    id: Uuid::now_v7(),
+                    name: format!("{} (Return)", route.name),
+                    description: format!("Return route for {}", route.name),
+                    start_point: route.end_point,
+                    end_point: route.start_point,
+                    fare: route.fare,
+                    distance: route.distance,
+                    stops: return_stops,
+                    created_at: now,
+                    updated_at: now,
+                };
+
+                let inserted_route = diesel::insert_into(routes_dsl::routes)
+                    .values(&new_route)
+                    .get_result::<Route>(&mut conn)
+                    .await
+                    .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+                inserted_route.id
+            }
+        };
+
+        let return_trip = Trip {
+            id: Uuid::now_v7(),
+            route_id: return_route_id,
+            bus_id: payload.bus_id,
+            driver_id: payload.driver_id,
+            departure_time: return_departure,
+            arrival_time: return_arrival,
+            actual_departure_time: None,
+            actual_arrival_time: None,
+            ride_type: RideType::RoundTrip,
+            status: TripStatus::NotStarted,
+            created_at: now,
+            updated_at: now,
+            return_time: None,
+        };
+
+        let inserted_return_trip = diesel::insert_into(trips)
+            .values(&return_trip)
+            .get_result::<Trip>(&mut conn)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+        let mut return_log = ActivityLog::new(ActivityType::TripCreated, user_id);
+        return_log.set_target_id(inserted_return_trip.id);
+        return_log.set_target_type("Trip".to_string());
+        if let Ok(details) = serde_json::to_value(&inserted_return_trip) {
+            return_log.set_details(details);
+        }
+        if let Err(e) = state.logger.try_send(return_log) {
+            tracing::warn!("Failed to queue activity log: {}", e);
+        }
     }
 
     Ok(inserted_trip)
@@ -255,6 +346,31 @@ pub async fn complete_trip(
             diesel::result::Error::NotFound => ApiError::NotFoundError("Trip not found".into()),
             _ => ApiError::InternalError(e.to_string().into()),
         })?;
+
+    if let Some(target_bus_id) = updated_trip.bus_id {
+        use crate::schema::buses::dsl as buses_dsl;
+
+        let next_trip = trips
+            .filter(bus_id.eq(Some(target_bus_id)))
+            .filter(status.eq(TripStatus::NotStarted))
+            .filter(departure_time.ge(updated_trip.departure_time))
+            .order(departure_time.asc())
+            .first::<Trip>(&mut conn)
+            .await
+            .optional()
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+        let next_trip_id = next_trip.map(|t| t.id);
+
+        diesel::update(buses_dsl::buses.filter(buses_dsl::id.eq(target_bus_id)))
+            .set((
+                buses_dsl::current_trip_id.eq(next_trip_id),
+                buses_dsl::updated_at.eq(now),
+            ))
+            .execute(&mut conn)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+    }
 
     let mut log = ActivityLog::new(ActivityType::TripCompleted, user_id);
     log.set_target_id(trip_id);
