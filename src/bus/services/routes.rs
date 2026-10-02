@@ -46,7 +46,7 @@ pub async fn create_route(
         end_point: payload.end_point,
         fare: payload.fare,
         distance: payload.distance,
-        stops: payload.stops.clone(),
+        stops: payload.stops.into_iter().map(Some).collect(),
         created_at: now,
         updated_at: now,
     };

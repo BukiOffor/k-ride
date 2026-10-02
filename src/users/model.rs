@@ -22,7 +22,6 @@ pub struct User {
     pub username: String,
     pub phone: String,
     pub address: String,
-    pub city: String,
     pub country: String,
     pub identity_type: Option<String>,
     pub identity_number: Option<String>,
@@ -33,6 +32,7 @@ pub struct User {
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
     pub last_seen: NaiveDateTime,
+    pub city: String,
 }
 
 #[derive(

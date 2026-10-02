@@ -22,7 +22,7 @@ pub struct Route {
     pub end_point: Uuid,
     pub fare: f32,
     pub distance: f32,
-    pub stops: Vec<Uuid>,
+    pub stops: Vec<Option<Uuid>>,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
 }

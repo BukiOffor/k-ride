@@ -23,7 +23,7 @@ pub struct UpdateRouteDto {
     pub end_point: Option<Uuid>,
     pub fare: Option<f32>,
     pub distance: Option<f32>,
-    pub stops: Option<Vec<Uuid>>,
+    pub stops: Option<Vec<Option<Uuid>>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
