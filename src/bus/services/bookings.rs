@@ -106,8 +106,11 @@ pub async fn create_booking(
     }
 
     // 6. Verify passenger capacity
-    if bus.current_passenger_count >= bus.capacity {
-        return Err(ApiError::Error("Bus is already at full capacity".into()));
+    let total_passengers = 1 + payload.num_of_kids;
+    if bus.current_passenger_count + total_passengers > bus.capacity {
+        return Err(ApiError::Error(
+            format!("Bus cannot accommodate {} passengers. Only {} seats left.", total_passengers, bus.capacity - bus.current_passenger_count).into()
+        ));
     }
 
     // 7. Load all active booked seats on this bus
@@ -184,7 +187,7 @@ pub async fn create_booking(
     // 12. Increment current_passenger_count on the bus
     diesel::update(buses_dsl::buses.filter(buses_dsl::id.eq(payload.bus_id)))
         .set((
-            buses_dsl::current_passenger_count.eq(bus.current_passenger_count + 1),
+            buses_dsl::current_passenger_count.eq(bus.current_passenger_count + total_passengers),
             buses_dsl::updated_at.eq(chrono::Utc::now().naive_utc()),
         ))
         .execute(&mut conn)
@@ -398,7 +401,8 @@ pub async fn cancel_booking(
         .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
 
     if let Some(bus) = bus {
-        let new_count = (bus.current_passenger_count - 1).max(0);
+        let total_passengers = 1 + booking.num_of_kids;
+        let new_count = (bus.current_passenger_count - total_passengers).max(0);
         diesel::update(buses_dsl::buses.filter(buses_dsl::id.eq(booking.bus_id)))
             .set((
                 buses_dsl::current_passenger_count.eq(new_count),
