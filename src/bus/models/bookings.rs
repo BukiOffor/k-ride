@@ -44,7 +44,7 @@ impl Booking {
         num_of_kids: i32,
     ) -> Self {
         let now = chrono::Utc::now().naive_utc();
-        let ref_code = Uuid::now_v7().to_string()[..8].to_uppercase();
+        let ref_code = Uuid::new_v4().to_string()[..8].to_uppercase();
         Self {
             id: Uuid::now_v7(),
             booking_ref: format!("BK-{}", ref_code),
