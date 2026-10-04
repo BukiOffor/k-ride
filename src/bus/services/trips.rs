@@ -350,10 +350,37 @@ pub async fn complete_trip(
     if let Some(target_bus_id) = updated_trip.bus_id {
         use crate::schema::buses::dsl as buses_dsl;
 
-        let next_trip = trips
+        let mut next_trip_query = trips
             .filter(bus_id.eq(Some(target_bus_id)))
             .filter(status.eq(TripStatus::NotStarted))
             .filter(departure_time.ge(updated_trip.departure_time))
+            .into_boxed();
+
+        if updated_trip.ride_type == RideType::RoundTrip {
+            use crate::schema::routes::dsl as routes_dsl;
+
+            // Load current route to find its start and end points
+            let current_route = routes_dsl::routes
+                .filter(routes_dsl::id.eq(updated_trip.route_id))
+                .first::<Route>(&mut conn)
+                .await
+                .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+            // Find reverse route
+            let reverse_route_opt = routes_dsl::routes
+                .filter(routes_dsl::start_point.eq(current_route.end_point))
+                .filter(routes_dsl::end_point.eq(current_route.start_point))
+                .first::<Route>(&mut conn)
+                .await
+                .optional()
+                .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+            if let Some(reverse_route) = reverse_route_opt {
+                next_trip_query = next_trip_query.filter(route_id.eq(reverse_route.id));
+            }
+        }
+
+        let next_trip = next_trip_query
             .order(departure_time.asc())
             .first::<Trip>(&mut conn)
             .await

@@ -31,7 +31,7 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
                 .delete(delete_bus)
                 .route_layer(middleware::from_fn_with_state(
                     state.clone(),
-                    crate::auth::middleware::admin_authorize,
+                    crate::auth::middleware::coordinator_authorize,
                 ))
                 .get(get_bus_by_id),
         )
@@ -89,6 +89,20 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
         .route(
             "/{bus_id}/capacity",
             patch(change_bus_capacity).route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                crate::auth::middleware::admin_authorize,
+            )),
+        )
+        .route(
+            "/{bus_id}/increment-passenger",
+            post(increment_passenger_count).route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                crate::auth::middleware::admin_authorize,
+            )),
+        )
+        .route(
+            "/{bus_id}/decrement-passenger",
+            post(decrement_passenger_count).route_layer(middleware::from_fn_with_state(
                 state.clone(),
                 crate::auth::middleware::admin_authorize,
             )),
@@ -518,5 +532,41 @@ pub async fn assign_bus_to_trip(
     let bus =
         services::buses::assign_bus_to_trip(state, bus_id, payload.trip_id, claims.user_id).await?;
     let response = Message::context("Bus assigned to trip successfully.", bus);
+    Ok(Json(response))
+}
+// increment bus current_passenger_count by 1 
+pub async fn increment_passenger_count(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Path(bus_id): Path<Uuid>,
+) -> Result<Json<Message<Bus>>, ApiError> {
+    let bus = services::buses::get_bus_by_id(state.clone(), bus_id).await?;
+    let updated_bus = services::buses::change_bus_allocation(
+        state,
+        bus_id,
+        bus.current_passenger_count + 1,
+        claims.user_id,
+    )
+    .await?;
+    let response = Message::context("Passenger count incremented successfully", updated_bus);
+    Ok(Json(response))
+}
+
+// decrease current_passenger_count by 1
+pub async fn decrement_passenger_count(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Path(bus_id): Path<Uuid>,
+) -> Result<Json<Message<Bus>>, ApiError> {
+    let bus = services::buses::get_bus_by_id(state.clone(), bus_id).await?;
+    let new_count = (bus.current_passenger_count - 1).max(0);
+    let updated_bus = services::buses::change_bus_allocation(
+        state,
+        bus_id,
+        new_count,
+        claims.user_id,
+    )
+    .await?;
+    let response = Message::context("Passenger count decremented successfully", updated_bus);
     Ok(Json(response))
 }
