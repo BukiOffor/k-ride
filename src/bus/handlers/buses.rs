@@ -31,7 +31,7 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
                 .delete(delete_bus)
                 .route_layer(middleware::from_fn_with_state(
                     state.clone(),
-                    crate::auth::middleware::coordinator_authorize,
+                    crate::auth::middleware::admin_authorize,
                 ))
                 .get(get_bus_by_id),
         )
@@ -76,7 +76,7 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
                 .delete(clear_bus_allocation)
                 .route_layer(middleware::from_fn_with_state(
                     state.clone(),
-                    crate::auth::middleware::admin_authorize,
+                    crate::auth::middleware::coordinator_authorize,
                 )),
         )
         .route(
