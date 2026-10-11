@@ -37,6 +37,7 @@ impl TryFrom<CreateUserDto> for User {
             is_identity_verified: false,
             is_active: true,
             role: RoleType::User,
+            car: None,
             created_at: chrono::Utc::now().naive_utc(),
             updated_at: chrono::Utc::now().naive_utc(),
             last_seen: chrono::Utc::now().naive_utc(),
@@ -57,6 +58,7 @@ pub struct AdminCreateUserDto {
     pub password: String,
     pub is_active: Option<bool>,
     pub role: RoleType,
+    pub car: Option<Uuid>,
 }
 
 impl TryFrom<AdminCreateUserDto> for User {
@@ -84,6 +86,7 @@ impl TryFrom<AdminCreateUserDto> for User {
             created_at: chrono::Utc::now().naive_utc(),
             updated_at: chrono::Utc::now().naive_utc(),
             last_seen: chrono::Utc::now().naive_utc(),
+            car: dto.car,
         })
     }
 }

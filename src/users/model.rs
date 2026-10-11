@@ -33,6 +33,7 @@ pub struct User {
     pub updated_at: NaiveDateTime,
     pub last_seen: NaiveDateTime,
     pub city: String,
+    pub car: Option<Uuid>
 }
 
 #[derive(

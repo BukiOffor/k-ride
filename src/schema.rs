@@ -147,6 +147,7 @@ diesel::table! {
         last_seen -> Timestamp,
         #[max_length = 100]
         city -> Varchar,
+        car -> Nullable<Uuid>,
     }
 }
 

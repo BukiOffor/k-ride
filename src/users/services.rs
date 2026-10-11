@@ -357,6 +357,7 @@ pub async fn seed_root_user(state: Arc<AppState>) -> Result<(), ApiError> {
         is_identity_verified: true,
         role: RoleType::Root,
         is_active: true,
+        car: None,
         created_at: now,
         updated_at: now,
         last_seen: now,
