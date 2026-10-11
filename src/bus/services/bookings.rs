@@ -61,6 +61,8 @@ pub async fn create_booking(
         .filter(bookings_dsl::route_id.eq(payload.route_id))
         .filter(bookings_dsl::status.ne(BookingStatus::Cancelled))
         .filter(bookings_dsl::status.ne(BookingStatus::Revoked))
+        .filter(bookings_dsl::status.ne(BookingStatus::Boarded))
+        .filter(bookings_dsl::trip_id.eq(payload.trip_id))
         .first::<Booking>(&mut conn)
         .await
         .optional()
@@ -118,6 +120,7 @@ pub async fn create_booking(
         .filter(bookings_dsl::bus_id.eq(payload.bus_id))
         .filter(bookings_dsl::status.ne(BookingStatus::Cancelled))
         .filter(bookings_dsl::status.ne(BookingStatus::Revoked))
+        .filter(bookings_dsl::trip_id.eq(payload.trip_id))
         .select(bookings_dsl::seat_number)
         .load::<i32>(&mut conn)
         .await
@@ -260,6 +263,8 @@ pub async fn create_booking(
                 .filter(bookings_dsl::route_id.eq(reverse_route.id))
                 .filter(bookings_dsl::status.ne(BookingStatus::Cancelled))
                 .filter(bookings_dsl::status.ne(BookingStatus::Revoked))
+                .filter(bookings_dsl::status.ne(BookingStatus::Boarded))
+                .filter(bookings_dsl::trip_id.eq(return_trip.id))
                 .first::<Booking>(&mut conn)
                 .await
                 .optional()
