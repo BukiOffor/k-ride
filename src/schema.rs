@@ -151,14 +151,77 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    cars(id) {
+        id -> Uuid,
+        #[max_length = 50]
+        license_plate -> Varchar,
+        capacity -> Int4,
+        car_type -> Varchar,
+        car_tier -> Varchar,
+        car_size -> Varchar,
+        #[max_length = 50]
+        color -> Varchar,
+        #[max_length = 20]
+        color_hex -> Nullable<Varchar>,
+        #[max_length = 100]
+        brand -> Varchar,
+        #[max_length = 100]
+        model -> Varchar,
+        year -> Int4,
+        vehicle_photo -> Nullable<Text>,
+        vehicle_registration -> Nullable<Text>,
+        insurance_certificate -> Nullable<Text>,
+        roadworthiness_certificate -> Nullable<Text>,
+        is_verified -> Bool,
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
+    }
+}
+
+diesel::table! {
+    driver_profiles (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        car_id -> Uuid,
+        nin_slip -> Text,
+        profile_photo -> Text,
+        is_koinonia_worker -> Bool,
+        #[max_length = 255]
+        koinonia_department -> Nullable<Varchar>,
+        #[max_length = 255]
+        guarantor_name -> Nullable<Varchar>,
+        #[max_length = 50]
+        guarantor_phone -> Nullable<Varchar>,
+        #[max_length = 100]
+        guarantor_relationship -> Nullable<Varchar>,
+        guarantor_photo -> Nullable<Text>,
+        #[max_length = 100]
+        licence_number -> Varchar,
+        #[max_length = 10]
+        licence_class -> Varchar,
+        licence_expiry_date -> Date,
+        licence_photo -> Text,
+        #[max_length = 50]
+        track -> Varchar,
+        #[max_length = 50]
+        status -> Varchar,
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
+    }
+}
+
 diesel::joinable!(activity_logs -> users (user_id));
 diesel::joinable!(bookings -> buses (bus_id));
 diesel::joinable!(bookings -> routes (route_id));
 diesel::joinable!(bookings -> trips (trip_id));
 diesel::joinable!(bookings -> users (user_id));
+diesel::joinable!(driver_profiles -> cars (car_id));
+diesel::joinable!(driver_profiles -> users (user_id));
 diesel::joinable!(ride_requests -> routes (route_id));
 diesel::joinable!(trips -> routes (route_id));
 diesel::joinable!(trips -> users (driver_id));
+diesel::joinable!(users -> cars (car));
 
 diesel::allow_tables_to_appear_in_same_query!(
     activity_logs,
@@ -169,4 +232,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     routes,
     trips,
     users,
+    cars,
+    driver_profiles,
 );
+

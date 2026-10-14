@@ -68,6 +68,11 @@ pub enum ActivityType {
     BookingPaymentUpdated,
     RideRequestCreated,
     RideRequestDeleted,
+    CarCreated,
+    CarUpdated,
+    CarDeleted,
+    CarAssigned,
+    CarUnassigned,
 }
 
 impl FromSql<Text, diesel::pg::Pg> for ActivityType {
@@ -173,6 +178,11 @@ impl ActivityType {
             ActivityType::BookingPaymentUpdated => "Updated booking payment status.".into(),
             ActivityType::RideRequestCreated => "Requested a ride.".into(),
             ActivityType::RideRequestDeleted => "Deleted a ride request.".into(),
+            ActivityType::CarCreated => "Created a new car.".into(),
+            ActivityType::CarUpdated => "Updated car details.".into(),
+            ActivityType::CarDeleted => "Deleted a car.".into(),
+            ActivityType::CarAssigned => "Assigned car to user.".into(),
+            ActivityType::CarUnassigned => "Unassigned car from user.".into(),
         }
     }
 }

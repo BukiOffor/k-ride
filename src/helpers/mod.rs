@@ -1,3 +1,4 @@
+pub mod fares;
 use super::*;
 use argon2::{
     Argon2,

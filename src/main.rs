@@ -1,10 +1,13 @@
 use axum::http::{Method, header::*};
 use diesel_migrations::{EmbeddedMigrations, embed_migrations};
+use dispatcher::RideDispatcher;
 use k_rides::AppState;
 use k_rides::auth::swagger::AuthApiDoc;
 use k_rides::bus::swagger::BusApiDoc;
 use k_rides::logs::swagger::LogsApiDoc;
 use k_rides::users::swagger::UsersApiDoc;
+use k_rides::vrp::swagger::VrpApiDoc;
+use redis::aio::ConnectionManager;
 use std::sync::Arc;
 use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
 use utoipa::OpenApi;
@@ -32,9 +35,20 @@ async fn main() {
 
     let (logger, logger_receiver) = async_channel::bounded::<k_rides::logs::ActivityLog>(10000);
 
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
+    let client = redis::Client::open(redis_url.as_str()).expect("Failed to create Redis client");
+    let connection_manager = ConnectionManager::new(client)
+        .await
+        .expect("Failed to create Redis connection manager");
+
+    // 1. Initialize H3 Engine
+    let dispatcher = RideDispatcher::new(connection_manager);
+
     let state: Arc<AppState> = AppState {
         pool: pool.clone(),
         logger: logger.clone(),
+        dispatcher: Arc::new(dispatcher),
     }
     .into();
 
@@ -74,6 +88,7 @@ async fn main() {
 
     let app = k_rides::users::handlers::routes(state.clone())
         .merge(k_rides::bus::handlers::routes(state.clone()))
+        .merge(k_rides::vrp::handlers::routes(state.clone()))
         .merge(k_rides::auth::handlers::routes(state.clone()))
         .merge(k_rides::logs::handlers::routes(state.clone()))
         .layer(CompressionLayer::new())
@@ -82,6 +97,7 @@ async fn main() {
 
     let mut openapi = UsersApiDoc::openapi();
     openapi.merge(BusApiDoc::openapi());
+    openapi.merge(VrpApiDoc::openapi());
     openapi.merge(AuthApiDoc::openapi());
     openapi.merge(LogsApiDoc::openapi());
 

@@ -46,3 +46,5 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
+redis = { version = "1.7.1", features = ["tokio-comp", "connection-manager"] }
+dispatcher = { path = "dispatcher" }

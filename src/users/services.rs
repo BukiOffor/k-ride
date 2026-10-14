@@ -1,5 +1,103 @@
 use super::*;
+use crate::vrp::models::cars::{Car, CarSize, CarTier, CarType};
+use crate::vrp::models::drivers::DriverProfile;
 use diesel_async::RunQueryDsl;
+
+pub fn map_car_specs(seats: i32) -> (CarType, CarTier, CarSize) {
+    let car_size = if seats <= 2 {
+        CarSize::Standard
+    } else if seats <= 4 {
+        CarSize::Large
+    } else {
+        CarSize::XtraLarge
+    };
+    let car_type = if seats >= 6 {
+        CarType::Van
+    } else if seats >= 5 {
+        CarType::SUV
+    } else {
+        CarType::Saloon
+    };
+    (car_type, CarTier::Comfort, car_size)
+}
+
+async fn upsert_car_from_driver_details(
+    conn: &mut crate::AsyncPgConnection,
+    driver_details: &DriverRegistrationDto,
+    existing_car_id: Option<Uuid>,
+) -> Result<Uuid, ApiError> {
+    use crate::schema::cars::dsl::*;
+    let now = chrono::Utc::now().naive_utc();
+    let plate = driver_details.vehicle_plate_number.trim().to_uppercase();
+    let seats: i32 = driver_details.passenger_seats.into();
+    let (c_type, c_tier, c_size) = map_car_specs(seats);
+
+    let target_car = if let Some(target_id) = existing_car_id {
+        cars.filter(id.eq(target_id))
+            .first::<Car>(conn)
+            .await
+            .optional()
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?
+    } else {
+        cars.filter(license_plate.eq(&plate))
+            .first::<Car>(conn)
+            .await
+            .optional()
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?
+    };
+
+    if let Some(existing) = target_car {
+        let updated = diesel::update(cars.filter(id.eq(existing.id)))
+            .set((
+                license_plate.eq(&plate),
+                capacity.eq(seats),
+                car_type.eq(c_type),
+                car_tier.eq(c_tier),
+                car_size.eq(c_size),
+                color.eq(driver_details.vehicle_colour.trim()),
+                brand.eq(driver_details.vehicle_make.trim()),
+                model.eq(driver_details.vehicle_model.trim()),
+                year.eq(driver_details.vehicle_year),
+                vehicle_photo.eq(&driver_details.vehicle_photo),
+                vehicle_registration.eq(Some(&driver_details.vehicle_registration)),
+                insurance_certificate.eq(Some(&driver_details.insurance_certificate)),
+                roadworthiness_certificate.eq(Some(&driver_details.roadworthiness_certificate)),
+                updated_at.eq(now),
+            ))
+            .get_result::<Car>(conn)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+        Ok(updated.id)
+    } else {
+        let new_id = Uuid::now_v7();
+        let new_car = Car {
+            id: new_id,
+            license_plate: plate,
+            capacity: seats,
+            car_type: c_type,
+            car_tier: c_tier,
+            car_size: c_size,
+            color: driver_details.vehicle_colour.trim().to_string(),
+            color_hex: None,
+            brand: driver_details.vehicle_make.trim().to_string(),
+            model: driver_details.vehicle_model.trim().to_string(),
+            year: driver_details.vehicle_year,
+            vehicle_photo: driver_details.vehicle_photo.clone(),
+            vehicle_registration: Some(driver_details.vehicle_registration.clone()),
+            insurance_certificate: Some(driver_details.insurance_certificate.clone()),
+            roadworthiness_certificate: Some(driver_details.roadworthiness_certificate.clone()),
+            is_verified: false,
+            created_at: now,
+            updated_at: now,
+        };
+        diesel::insert_into(cars)
+            .values(&new_car)
+            .execute(conn)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+        Ok(new_id)
+    }
+}
 
 pub async fn create_user(
     state: Arc<AppState>,
@@ -24,20 +122,108 @@ pub async fn create_user(
         ));
     }
 
-    // Create User object from DTO
-    let new_user: User = payload.try_into()?;
-
-    // Insert user into DB
-    let user = diesel::insert_into(crate::schema::users::dsl::users)
-        .values(&new_user)
-        .get_result::<User>(&mut conn)
+    // Validate username doesn't exist
+    let username_exists = crate::schema::users::dsl::users
+        .filter(crate::schema::users::dsl::username.eq(&payload.username))
+        .first::<User>(&mut conn)
         .await
-        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+        .is_ok();
 
-    Ok(Message::context(
-        "User created successfully.",
-        UserDto::from(user),
-    ))
+    if username_exists {
+        return Err(ApiError::Error(
+            "User with this username already exists".into(),
+        ));
+    }
+
+    if payload.role == RoleType::Driver && payload.driver_details.is_some() {
+        let driver_details = payload.driver_details.as_ref().unwrap();
+        driver_details.validate()?;
+
+        let now = chrono::Utc::now().naive_utc();
+        let car_id = upsert_car_from_driver_details(&mut conn, driver_details, payload.car).await?;
+
+        let password_hash = crate::helpers::password_hasher(&payload.password)
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+        let user_id = Uuid::now_v7();
+
+        let new_user = User {
+            id: user_id,
+            first_name: payload.first_name,
+            last_name: payload.last_name,
+            email: payload.email,
+            username: payload.username,
+            phone: payload.phone,
+            address: payload.address,
+            country: payload.country,
+            city: payload.city.unwrap_or_else(|| "N/A".to_string()),
+            identity_type: Some("NIN".to_string()),
+            identity_number: Some(driver_details.nin.trim().to_string()),
+            password_hash,
+            is_identity_verified: false,
+            role: RoleType::Driver,
+            is_active: payload.is_active.unwrap_or(true),
+            car: Some(car_id),
+            created_at: now,
+            updated_at: now,
+            last_seen: now,
+        };
+
+        let user = diesel::insert_into(crate::schema::users::dsl::users)
+            .values(&new_user)
+            .get_result::<User>(&mut conn)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+        let new_profile = DriverProfile {
+            id: Uuid::now_v7(),
+            user_id,
+            car_id,
+            nin_slip: driver_details.nin_slip.clone(),
+            profile_photo: driver_details.profile_photo.clone(),
+            is_koinonia_worker: driver_details.is_koinonia_worker,
+            koinonia_department: driver_details.koinonia_department.clone(),
+            guarantor_name: driver_details.guarantor_name.clone(),
+            guarantor_phone: driver_details.guarantor_phone.clone(),
+            guarantor_relationship: driver_details.guarantor_relationship.clone(),
+            guarantor_photo: driver_details.guarantor_photo.clone(),
+            licence_number: driver_details.licence_number.trim().to_string(),
+            licence_class: driver_details.licence_class.to_string(),
+            licence_expiry_date: driver_details.licence_expiry_date,
+            licence_photo: driver_details.licence_photo.clone(),
+            track: driver_details.track.to_string(),
+            status: "Pending".to_string(),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let profile = diesel::insert_into(crate::schema::driver_profiles::dsl::driver_profiles)
+            .values(&new_profile)
+            .get_result::<DriverProfile>(&mut conn)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+        let user_dto = UserDto::from(user).with_driver_profile(profile.into());
+
+        Ok(Message::context(
+            "User created successfully.",
+            user_dto,
+        ))
+    } else {
+        // Create User object from DTO
+        let new_user: User = payload.try_into()?;
+
+        // Insert user into DB
+        let user = diesel::insert_into(crate::schema::users::dsl::users)
+            .values(&new_user)
+            .get_result::<User>(&mut conn)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+        Ok(Message::context(
+            "User created successfully.",
+            UserDto::from(user),
+        ))
+    }
 }
 
 pub async fn find_user_by_email_or_username(
@@ -114,20 +300,111 @@ pub async fn register_user(
         ));
     }
 
-    // Create User object from DTO
-    let new_user: User = payload.try_into()?;
-
-    // Insert user into DB
-    let user = diesel::insert_into(crate::schema::users::dsl::users)
-        .values(&new_user)
-        .get_result::<User>(&mut conn)
+    // Validate username doesn't exist
+    let username_exists = crate::schema::users::dsl::users
+        .filter(crate::schema::users::dsl::username.eq(&payload.username))
+        .first::<User>(&mut conn)
         .await
-        .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+        .is_ok();
 
-    Ok(Message::context(
-        "User created successfully.",
-        UserDto::from(user),
-    ))
+    if username_exists {
+        return Err(ApiError::Error(
+            "User with this username already exists".into(),
+        ));
+    }
+
+    let is_driver = payload.role == Some(RoleType::Driver) || payload.driver_details.is_some();
+    if is_driver {
+        let driver_details = payload.driver_details.as_ref().ok_or_else(|| {
+            ApiError::BadRequest("Driver registration details are required for driver accounts")
+        })?;
+        driver_details.validate()?;
+
+        let now = chrono::Utc::now().naive_utc();
+        let car_id = upsert_car_from_driver_details(&mut conn, driver_details, None).await?;
+
+        let password_hash = crate::helpers::password_hasher(&payload.password)
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+        let user_id = Uuid::now_v7();
+
+        let new_user = User {
+            id: user_id,
+            first_name: payload.first_name,
+            last_name: payload.last_name,
+            email: payload.email,
+            username: payload.username,
+            phone: payload.phone,
+            address: payload.address,
+            country: payload.country,
+            city: payload.city.unwrap_or_else(|| "N/A".to_string()),
+            identity_type: Some("NIN".to_string()),
+            identity_number: Some(driver_details.nin.trim().to_string()),
+            password_hash,
+            is_identity_verified: false,
+            is_active: true,
+            role: RoleType::Driver,
+            car: Some(car_id),
+            created_at: now,
+            updated_at: now,
+            last_seen: now,
+        };
+
+        let user = diesel::insert_into(crate::schema::users::dsl::users)
+            .values(&new_user)
+            .get_result::<User>(&mut conn)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+        let new_profile = DriverProfile {
+            id: Uuid::now_v7(),
+            user_id,
+            car_id,
+            nin_slip: driver_details.nin_slip.clone(),
+            profile_photo: driver_details.profile_photo.clone(),
+            is_koinonia_worker: driver_details.is_koinonia_worker,
+            koinonia_department: driver_details.koinonia_department.clone(),
+            guarantor_name: driver_details.guarantor_name.clone(),
+            guarantor_phone: driver_details.guarantor_phone.clone(),
+            guarantor_relationship: driver_details.guarantor_relationship.clone(),
+            guarantor_photo: driver_details.guarantor_photo.clone(),
+            licence_number: driver_details.licence_number.trim().to_string(),
+            licence_class: driver_details.licence_class.to_string(),
+            licence_expiry_date: driver_details.licence_expiry_date,
+            licence_photo: driver_details.licence_photo.clone(),
+            track: driver_details.track.to_string(),
+            status: "Pending".to_string(),
+            created_at: now,
+            updated_at: now,
+        };
+
+        let profile = diesel::insert_into(crate::schema::driver_profiles::dsl::driver_profiles)
+            .values(&new_profile)
+            .get_result::<DriverProfile>(&mut conn)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+        let user_dto = UserDto::from(user).with_driver_profile(profile.into());
+
+        Ok(Message::context(
+            "User created successfully.",
+            user_dto,
+        ))
+    } else {
+        // Create User object from DTO
+        let new_user: User = payload.try_into()?;
+
+        // Insert user into DB
+        let user = diesel::insert_into(crate::schema::users::dsl::users)
+            .values(&new_user)
+            .get_result::<User>(&mut conn)
+            .await
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+
+        Ok(Message::context(
+            "User created successfully.",
+            UserDto::from(user),
+        ))
+    }
 }
 
 pub async fn get_users(
@@ -209,7 +486,20 @@ pub async fn get_user_by_id(state: Arc<AppState>, user_id: Uuid) -> Result<UserD
             _ => ApiError::InternalError(e.to_string().into()),
         })?;
 
-    Ok(UserDto::from(user))
+    let mut user_dto = UserDto::from(user);
+    if user_dto.role == RoleType::Driver {
+        let profile = crate::schema::driver_profiles::dsl::driver_profiles
+            .filter(crate::schema::driver_profiles::dsl::user_id.eq(user_id))
+            .first::<DriverProfile>(&mut conn)
+            .await
+            .optional()
+            .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
+        if let Some(p) = profile {
+            user_dto = user_dto.with_driver_profile(p.into());
+        }
+    }
+
+    Ok(user_dto)
 }
 
 pub async fn update_user(
