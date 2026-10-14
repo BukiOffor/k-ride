@@ -211,6 +211,172 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    ride_options (id) {
+        #[max_length = 50]
+        id -> Varchar,
+        #[max_length = 100]
+        name -> Varchar,
+        description -> Text,
+        #[max_length = 20]
+        vehicle_class -> Varchar,
+        eligible_vehicle_classes -> Array<Text>,
+        capacity -> Int4,
+        shared -> Bool,
+        #[max_length = 3]
+        currency -> Varchar,
+        base_fare_minor -> Int8,
+        per_km_minor -> Int8,
+        per_minute_minor -> Int8,
+        minimum_fare_minor -> Int8,
+        booking_fee_minor -> Int8,
+        free_waiting_minutes -> Int4,
+        waiting_per_minute_minor -> Int8,
+        rounding_minor -> Int8,
+        is_active -> Bool,
+        sort_order -> Int4,
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
+    }
+}
+
+diesel::table! {
+    fare_estimates (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        pickup -> Jsonb,
+        destination -> Jsonb,
+        route -> Jsonb,
+        options -> Jsonb,
+        expires_at -> Timestamp,
+        created_at -> Timestamp,
+    }
+}
+
+diesel::table! {
+    rides (id) {
+        id -> Uuid,
+        passenger_id -> Uuid,
+        driver_id -> Nullable<Uuid>,
+        #[max_length = 30]
+        status -> Varchar,
+        version -> Int4,
+        #[max_length = 50]
+        option_id -> Varchar,
+        option_snapshot -> Jsonb,
+        estimate_id -> Uuid,
+        pickup -> Jsonb,
+        destination -> Jsonb,
+        route -> Jsonb,
+        fare -> Jsonb,
+        #[max_length = 3]
+        currency -> Varchar,
+        fare_total_minor -> Int8,
+        waiting_charge_minor -> Int8,
+        final_fare_minor -> Nullable<Int8>,
+        #[max_length = 30]
+        payment_method -> Varchar,
+        #[max_length = 30]
+        payment_status -> Varchar,
+        #[max_length = 8]
+        trip_pin -> Varchar,
+        dispatch_round -> Int4,
+        cancellation -> Nullable<Jsonb>,
+        tracking -> Nullable<Jsonb>,
+        rating -> Nullable<Jsonb>,
+        #[max_length = 20]
+        sos_status -> Varchar,
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
+        assigned_at -> Nullable<Timestamp>,
+        arrived_at -> Nullable<Timestamp>,
+        started_at -> Nullable<Timestamp>,
+        completed_at -> Nullable<Timestamp>,
+        cancelled_at -> Nullable<Timestamp>,
+    }
+}
+
+diesel::table! {
+    ride_offers (id) {
+        id -> Uuid,
+        ride_id -> Uuid,
+        driver_id -> Uuid,
+        dispatch_round -> Int4,
+        #[max_length = 20]
+        status -> Varchar,
+        pickup_distance_m -> Nullable<Int4>,
+        pickup_eta_seconds -> Nullable<Int4>,
+        expires_at -> Timestamp,
+        responded_at -> Nullable<Timestamp>,
+        created_at -> Timestamp,
+    }
+}
+
+diesel::table! {
+    driver_availability (driver_id) {
+        driver_id -> Uuid,
+        #[max_length = 20]
+        status -> Varchar,
+        lat -> Nullable<Float8>,
+        lng -> Nullable<Float8>,
+        heading -> Nullable<Float8>,
+        speed_mps -> Nullable<Float8>,
+        accuracy_m -> Nullable<Float8>,
+        recorded_at -> Nullable<Timestamp>,
+        received_at -> Nullable<Timestamp>,
+        updated_at -> Timestamp,
+    }
+}
+
+diesel::table! {
+    ride_ratings (id) {
+        id -> Uuid,
+        ride_id -> Uuid,
+        rater_id -> Uuid,
+        ratee_id -> Uuid,
+        #[max_length = 20]
+        rater_role -> Varchar,
+        stars -> Int2,
+        tags -> Array<Text>,
+        comment -> Nullable<Text>,
+        created_at -> Timestamp,
+    }
+}
+
+diesel::table! {
+    safety_events (id) {
+        id -> Uuid,
+        ride_id -> Uuid,
+        reporter_id -> Uuid,
+        #[max_length = 20]
+        reporter_role -> Varchar,
+        #[max_length = 20]
+        kind -> Varchar,
+        #[max_length = 50]
+        event_type -> Varchar,
+        details -> Nullable<Text>,
+        location -> Nullable<Jsonb>,
+        driver_location -> Nullable<Jsonb>,
+        #[max_length = 20]
+        status -> Varchar,
+        occurred_at -> Timestamp,
+        created_at -> Timestamp,
+    }
+}
+
+diesel::table! {
+    idempotency_keys (user_id, endpoint, idempotency_key) {
+        user_id -> Uuid,
+        #[max_length = 100]
+        endpoint -> Varchar,
+        #[max_length = 200]
+        idempotency_key -> Varchar,
+        status_code -> Int4,
+        response -> Jsonb,
+        created_at -> Timestamp,
+    }
+}
+
 diesel::joinable!(activity_logs -> users (user_id));
 diesel::joinable!(bookings -> buses (bus_id));
 diesel::joinable!(bookings -> routes (route_id));
@@ -222,6 +388,10 @@ diesel::joinable!(ride_requests -> routes (route_id));
 diesel::joinable!(trips -> routes (route_id));
 diesel::joinable!(trips -> users (driver_id));
 diesel::joinable!(users -> cars (car));
+diesel::joinable!(rides -> ride_options (option_id));
+diesel::joinable!(ride_offers -> rides (ride_id));
+diesel::joinable!(ride_ratings -> rides (ride_id));
+diesel::joinable!(safety_events -> rides (ride_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     activity_logs,
@@ -234,5 +404,13 @@ diesel::allow_tables_to_appear_in_same_query!(
     users,
     cars,
     driver_profiles,
+    ride_options,
+    fare_estimates,
+    rides,
+    ride_offers,
+    driver_availability,
+    ride_ratings,
+    safety_events,
+    idempotency_keys,
 );
 

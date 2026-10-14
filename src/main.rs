@@ -45,10 +45,14 @@ async fn main() {
     // 1. Initialize H3 Engine
     let dispatcher = RideDispatcher::new(connection_manager);
 
+    // 2. Initialize in-memory WebSocket DashMap registry
+    let ws_registry = Arc::new(k_rides::vrp::realtime::WsRegistry::new());
+
     let state: Arc<AppState> = AppState {
         pool: pool.clone(),
         logger: logger.clone(),
         dispatcher: Arc::new(dispatcher),
+        ws_registry,
     }
     .into();
 
@@ -101,9 +105,12 @@ async fn main() {
     openapi.merge(AuthApiDoc::openapi());
     openapi.merge(LogsApiDoc::openapi());
 
+    let ws_routes = axum::Router::new().nest("/rides", k_rides::vrp::realtime::routes(state.clone()));
+
     let api = axum::Router::new()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi))
-        .nest("/api/v1", app);
+        .nest("/api/v1", app)
+        .merge(ws_routes);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:9990").await.unwrap();
     k_rides::info!("Listening on {}", listener.local_addr().unwrap());

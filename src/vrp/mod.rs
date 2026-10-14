@@ -3,6 +3,9 @@ pub mod handlers;
 pub mod models;
 pub mod services;
 pub mod swagger;
+pub mod realtime;
+
+pub use realtime::WsRegistry;
 
 pub use dtos::*;
 pub use models::cars::*;

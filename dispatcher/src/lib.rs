@@ -12,8 +12,8 @@ use redis::AsyncCommands;
 // needs only ~91 cells; exact distance filtering in `query_within_radius` keeps results precise.
 const VENUE_RESOLUTION: Resolution = Resolution::Six;
 
-/// A driver is considered offline if it hasn't pinged for this many seconds.
-const DRIVER_TTL_SECS: u64 = 20;
+/// A driver is considered offline if it hasn't pinged for this many seconds (15-second dead-man's switch).
+const DRIVER_TTL_SECS: u64 = 15;
 
 
 impl RideDispatcher {
@@ -30,6 +30,27 @@ impl RideDispatcher {
     pub fn coordinate_to_cell(&self, lat: f64, lng: f64) -> Result<CellIndex, Box<dyn std::error::Error>> {
         let coord = LatLng::new(lat, lng)?;
         Ok(coord.to_cell(VENUE_RESOLUTION))
+    }
+
+    /// Removes a driver immediately from the spatial index and cell tracking when going offline.
+    pub async fn remove_driver(&mut self, driver_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let driver_key = format!("driver:state:{}", driver_id);
+        let driver_cell_key = format!("driver:cell:{}", driver_id);
+
+        let previous_cell: Option<String> = self.redis.get(&driver_cell_key).await?;
+
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+
+        if let Some(cell) = previous_cell {
+            pipe.zrem(cell_active_key(&cell), driver_id).ignore();
+        }
+
+        pipe.del(&driver_key).ignore();
+        pipe.del(&driver_cell_key).ignore();
+
+        let _: () = pipe.query_async(&mut self.redis).await?;
+        Ok(())
     }
 
     /// Ingests real-time driver GPS ping and updates cell indices.

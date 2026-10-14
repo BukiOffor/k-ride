@@ -7,7 +7,7 @@ edition = "2024"
 anyhow = "1.0.98"
 argon2 = { version = "0.5", features = ["std"] }
 async-trait = "0.1.88"
-axum = { version = "0.8.4", features = ["macros", "multipart"] }
+axum = { version = "0.8.4", features = ["macros", "multipart", "ws"] }
 bb8 = "0.9.0"
 chrono = { version = "0.4.41", features = ["serde"] }
 diesel = { version = "2.2.11", features = ["chrono", "postgres", "r2d2", "serde_json", "uuid"] }
@@ -35,7 +35,7 @@ base64 = "0.21.3"
 strum = "0.27.2"
 strum_macros = "0.27.2"
 oauth2 = "5.0.0"
-reqwest = "0.12.24"
+reqwest = { version = "0.12.24", features = ["json"] }
 lettre = { version = "0.10.4", features = ["tokio1", "tokio1-native-tls"] }
 handlebars = "6.3.2"
 string_validator = { path = "string_validator" }
@@ -48,3 +48,5 @@ sha2 = "0.10"
 hex = "0.4"
 redis = { version = "1.7.1", features = ["tokio-comp", "connection-manager"] }
 dispatcher = { path = "dispatcher" }
+dashmap = "6.2.1"
+futures-util = "0.3"
