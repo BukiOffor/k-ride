@@ -89,6 +89,8 @@ pub struct WsRegistry {
     pub driver_online: Arc<DashMap<Uuid, bool>>,
     /// Driver ID -> Current Active Ride ID in RAM
     pub driver_active_rides: Arc<DashMap<Uuid, Uuid>>,
+    /// Driver ID -> Last activity timestamp in RAM
+    pub driver_last_seen: Arc<DashMap<Uuid, std::time::Instant>>,
 }
 
 impl WsRegistry {
@@ -98,13 +100,20 @@ impl WsRegistry {
             ride_channels: Arc::new(DashMap::new()),
             driver_online: Arc::new(DashMap::new()),
             driver_active_rides: Arc::new(DashMap::new()),
+            driver_last_seen: Arc::new(DashMap::new()),
         }
     }
 
     /// Phase 1: Registers a driver's outgoing mailbox upon WebSocket handshake.
     pub fn register_driver(&self, driver_id: Uuid, tx: mpsc::Sender<OutgoingWsMessage>) {
         self.drivers.insert(driver_id, tx);
+        self.driver_last_seen.insert(driver_id, std::time::Instant::now());
         tracing::info!("Registered driver in DashMap mailbox: {}", driver_id);
+    }
+
+    /// Refreshes the last-seen activity timestamp for a driver.
+    pub fn touch_driver(&self, driver_id: &Uuid) {
+        self.driver_last_seen.insert(*driver_id, std::time::Instant::now());
     }
 
     /// Sets driver online availability in memory.
@@ -140,6 +149,65 @@ impl WsRegistry {
         if self.drivers.remove(driver_id).is_some() {
             tracing::info!("Unregistered driver from DashMap: {}", driver_id);
         }
+        self.driver_last_seen.remove(driver_id);
+    }
+
+    /// Spawns a background worker that periodically inspects active WebSocket connections
+    /// and cleans up stale/dead connections where no heartbeat was received within `stale_threshold`.
+    pub fn start_stale_connection_cleaner(
+        self: &Arc<Self>,
+        check_interval: std::time::Duration,
+        stale_threshold: std::time::Duration,
+    ) -> tokio::task::JoinHandle<()> {
+        let registry = self.clone();
+        tokio::spawn(async move {
+            tracing::info!(
+                "Started WebSocket stale connection cleaner worker (interval: {:?}, timeout: {:?})",
+                check_interval,
+                stale_threshold
+            );
+            let mut interval = tokio::time::interval(check_interval);
+            loop {
+                interval.tick().await;
+                registry.cleanup_stale_connections(stale_threshold);
+            }
+        })
+    }
+
+    /// Cleans up any registered driver connections that haven't sent a ping or message
+    /// within `stale_threshold`, or whose outgoing channel has closed.
+    pub fn cleanup_stale_connections(&self, stale_threshold: std::time::Duration) {
+        let now = std::time::Instant::now();
+        let mut stale_drivers = Vec::new();
+
+        // 1. Scan drivers for dead/closed channels or inactive heartbeats
+        for entry in self.drivers.iter() {
+            let driver_id = *entry.key();
+            let sender = entry.value();
+
+            if sender.is_closed() {
+                stale_drivers.push((driver_id, "outgoing_channel_closed"));
+                continue;
+            }
+
+            if let Some(last_seen) = self.driver_last_seen.get(&driver_id) {
+                if now.duration_since(*last_seen) > stale_threshold {
+                    stale_drivers.push((driver_id, "heartbeat_timeout"));
+                }
+            }
+        }
+
+        for (driver_id, reason) in stale_drivers {
+            tracing::warn!(
+                "Stale connection cleaner: removing dead driver connection {} (reason: {})",
+                driver_id,
+                reason
+            );
+            self.unregister_driver(&driver_id);
+        }
+
+        // 2. Clean up abandoned ride broadcast channels with 0 active subscribers
+        self.ride_channels.retain(|_ride_id, bcast| bcast.receiver_count() > 0);
     }
 
     /// Checks if a driver currently has an active WebSocket connection in RAM.
@@ -215,112 +283,156 @@ async fn handle_socket(state: Arc<AppState>, claims: Claims, socket: WebSocket) 
         state.ws_registry.register_driver(user_id, outgoing_tx.clone());
     }
 
-    // Task: Outgoing Speaker (sends messages down to the client's WebSocket)
+    // Task: Outgoing Speaker (sends messages down to the client's WebSocket & periodic keepalive pings)
     let send_task = tokio::spawn(async move {
-        while let Some(msg) = outgoing_rx.recv().await {
-            if let Ok(json_str) = serde_json::to_string(&msg) {
-                if ws_sender.send(Message::Text(json_str.into())).await.is_err() {
-                    break;
+        let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(20));
+        ping_interval.tick().await; // consume immediate initial tick
+
+        loop {
+            tokio::select! {
+                Some(msg) = outgoing_rx.recv() => {
+                    if let Ok(json_str) = serde_json::to_string(&msg) {
+                        if ws_sender.send(Message::Text(json_str.into())).await.is_err() {
+                            break;
+                        }
+                    }
                 }
+                _ = ping_interval.tick() => {
+                    // Send protocol-level ping to detect broken pipes and prevent NAT timeouts
+                    if ws_sender.send(Message::Ping(vec![].into())).await.is_err() {
+                        tracing::debug!("WebSocket keep-alive ping failed (broken pipe), terminating sender task");
+                        break;
+                    }
+                }
+                else => break,
             }
         }
     });
 
-    // Task: Incoming Listener (receives 4-second GPS location heartbeats & pings)
+    // Task: Incoming Listener (receives 4-second GPS location heartbeats & pings with inactivity timeout)
     let app_state_clone = state.clone();
     let mut dispatcher = (*state.dispatcher).clone();
     let mut ride_subscriptions: std::collections::HashMap<Uuid, tokio::task::JoinHandle<()>> =
         std::collections::HashMap::new();
 
-    while let Some(Ok(msg)) = ws_receiver.next().await {
-        match msg {
-            Message::Text(text) => {
-                if let Ok(frame) = serde_json::from_str::<IncomingWsFrame>(&text) {
-                    match frame {
-                        IncomingWsFrame::Ping => {
-                            let _ = outgoing_tx.send(OutgoingWsMessage::Pong).await;
-                        }
-                        IncomingWsFrame::Location { location } => {
-                            // Phase 2: 4-Second Location Heartbeat (IN-MEMORY & REDIS ONLY, NO DB QUERIES)
-                            if is_driver {
-                                // Only ingest into Redis spatial matching pool if driver is currently marked ONLINE in RAM
-                                if app_state_clone.ws_registry.is_driver_online(&user_id) {
-                                    let driver_state = dispatcher::DriverState {
-                                        driver_id: user_id.to_string(),
-                                        lat: location.point.lat,
-                                        lng: location.point.lng,
-                                        available_seats: 4,
-                                    };
+    const INCOMING_HEARTBEAT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 
-                                    let _ = dispatcher.ingest_driver_location(&driver_state).await;
+    loop {
+        let next_msg = tokio::time::timeout(INCOMING_HEARTBEAT_TIMEOUT, ws_receiver.next()).await;
+        match next_msg {
+            Ok(Some(Ok(msg))) => {
+                if is_driver {
+                    app_state_clone.ws_registry.touch_driver(&user_id);
+                }
+                match msg {
+                    Message::Text(text) => {
+                        if let Ok(frame) = serde_json::from_str::<IncomingWsFrame>(&text) {
+                            match frame {
+                                IncomingWsFrame::Ping => {
+                                    let _ = outgoing_tx.send(OutgoingWsMessage::Pong).await;
                                 }
-
-                                // Broadcast location update if driver has an active ride in RAM
-                                if let Some(ride_id) = app_state_clone.ws_registry.get_driver_active_ride(&user_id) {
-                                    let loc_event = WsEventFrame {
-                                        id: format!("evt_{}", Uuid::now_v7()),
-                                        ride_id: Some(ride_id),
-                                        seq: 1,
-                                        ride_version: None,
-                                        occurred_at: chrono::Utc::now().to_rfc3339(),
-                                        payload: serde_json::json!({
-                                            "type": "ride.driver.location_updated",
-                                            "location": location,
-                                        }),
-                                    };
-                                    app_state_clone
-                                        .ws_registry
-                                        .broadcast_ride_event(ride_id, loc_event);
-                                }
-                            }
-                        }
-                        IncomingWsFrame::Subscribe { channel } => {
-                            tracing::debug!("User {} subscribed to {}", user_id, channel);
-                            if channel.starts_with("ride:") {
-                                if let Ok(ride_id) = Uuid::parse_str(&channel[5..]) {
+                                IncomingWsFrame::Location { location } => {
+                                    // Phase 2: 4-Second Location Heartbeat (IN-MEMORY & REDIS ONLY, NO DB QUERIES)
                                     if is_driver {
-                                        app_state_clone.ws_registry.set_driver_active_ride(user_id, Some(ride_id));
-                                    }
-                                    if !ride_subscriptions.contains_key(&ride_id) {
-                                        let mut rx = app_state_clone
-                                            .ws_registry
-                                            .get_or_create_ride_channel(ride_id)
-                                            .subscribe();
-                                        let tx = outgoing_tx.clone();
-                                        let sub_handle = tokio::spawn(async move {
-                                            while let Ok(event) = rx.recv().await {
-                                                if tx
-                                                    .send(OutgoingWsMessage::Event { event })
-                                                    .await
-                                                    .is_err()
-                                                {
-                                                    break;
-                                                }
-                                            }
-                                        });
-                                        ride_subscriptions.insert(ride_id, sub_handle);
+                                        // Only ingest into Redis spatial matching pool if driver is currently marked ONLINE in RAM
+                                        if app_state_clone.ws_registry.is_driver_online(&user_id) {
+                                            let driver_state = dispatcher::DriverState {
+                                                driver_id: user_id.to_string(),
+                                                lat: location.point.lat,
+                                                lng: location.point.lng,
+                                                available_seats: 4,
+                                            };
+
+                                            let _ = dispatcher.ingest_driver_location(&driver_state).await;
+                                        }
+
+                                        // Broadcast location update if driver has an active ride in RAM
+                                        if let Some(ride_id) = app_state_clone.ws_registry.get_driver_active_ride(&user_id) {
+                                            let loc_event = WsEventFrame {
+                                                id: format!("evt_{}", Uuid::now_v7()),
+                                                ride_id: Some(ride_id),
+                                                seq: 1,
+                                                ride_version: None,
+                                                occurred_at: chrono::Utc::now().to_rfc3339(),
+                                                payload: serde_json::json!({
+                                                    "type": "ride.driver.location_updated",
+                                                    "location": location,
+                                                }),
+                                            };
+                                            app_state_clone
+                                                .ws_registry
+                                                .broadcast_ride_event(ride_id, loc_event);
+                                        }
                                     }
                                 }
-                            }
-                        }
-                        IncomingWsFrame::Unsubscribe { channel } => {
-                            tracing::debug!("User {} unsubscribed from {}", user_id, channel);
-                            if channel.starts_with("ride:") {
-                                if let Ok(ride_id) = Uuid::parse_str(&channel[5..]) {
-                                    if is_driver && app_state_clone.ws_registry.get_driver_active_ride(&user_id) == Some(ride_id) {
-                                        app_state_clone.ws_registry.set_driver_active_ride(user_id, None);
+                                IncomingWsFrame::Subscribe { channel } => {
+                                    tracing::debug!("User {} subscribed to {}", user_id, channel);
+                                    if channel.starts_with("ride:") {
+                                        if let Ok(ride_id) = Uuid::parse_str(&channel[5..]) {
+                                            if is_driver {
+                                                app_state_clone.ws_registry.set_driver_active_ride(user_id, Some(ride_id));
+                                            }
+                                            if !ride_subscriptions.contains_key(&ride_id) {
+                                                let mut rx = app_state_clone
+                                                    .ws_registry
+                                                    .get_or_create_ride_channel(ride_id)
+                                                    .subscribe();
+                                                let tx = outgoing_tx.clone();
+                                                let sub_handle = tokio::spawn(async move {
+                                                    while let Ok(event) = rx.recv().await {
+                                                        if tx
+                                                            .send(OutgoingWsMessage::Event { event })
+                                                            .await
+                                                            .is_err()
+                                                        {
+                                                            break;
+                                                        }
+                                                    }
+                                                });
+                                                ride_subscriptions.insert(ride_id, sub_handle);
+                                            }
+                                        }
                                     }
-                                    if let Some(handle) = ride_subscriptions.remove(&ride_id) {
-                                        handle.abort();
+                                }
+                                IncomingWsFrame::Unsubscribe { channel } => {
+                                    tracing::debug!("User {} unsubscribed from {}", user_id, channel);
+                                    if channel.starts_with("ride:") {
+                                        if let Ok(ride_id) = Uuid::parse_str(&channel[5..]) {
+                                            if is_driver && app_state_clone.ws_registry.get_driver_active_ride(&user_id) == Some(ride_id) {
+                                                app_state_clone.ws_registry.set_driver_active_ride(user_id, None);
+                                            }
+                                            if let Some(handle) = ride_subscriptions.remove(&ride_id) {
+                                                handle.abort();
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+                    Message::Ping(_) => {
+                        // Axum's underlying tungstenite socket automatically answers protocol Ping with Pong
+                    }
+                    Message::Pong(_) => {
+                        // Protocol Pong received, socket is active
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
                 }
             }
-            Message::Close(_) => break,
-            _ => {}
+            Ok(Some(Err(e))) => {
+                tracing::debug!("WebSocket error for user {}: {}", user_id, e);
+                break;
+            }
+            Ok(None) => break,
+            Err(_) => {
+                tracing::warn!(
+                    "WebSocket connection for user {} timed out (no heartbeat for {:?}), terminating stale connection",
+                    user_id,
+                    INCOMING_HEARTBEAT_TIMEOUT
+                );
+                break;
+            }
         }
     }
 

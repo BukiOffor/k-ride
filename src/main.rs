@@ -45,8 +45,12 @@ async fn main() {
     // 1. Initialize H3 Engine
     let dispatcher = RideDispatcher::new(connection_manager);
 
-    // 2. Initialize in-memory WebSocket DashMap registry
+    // 2. Initialize in-memory WebSocket DashMap registry & start stale connection cleaner worker
     let ws_registry = Arc::new(k_rides::vrp::realtime::WsRegistry::new());
+    ws_registry.start_stale_connection_cleaner(
+        std::time::Duration::from_secs(15),
+        std::time::Duration::from_secs(60),
+    );
 
     let state: Arc<AppState> = AppState {
         pool: pool.clone(),
