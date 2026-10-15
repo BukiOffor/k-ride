@@ -109,7 +109,8 @@ async fn main() {
     openapi.merge(AuthApiDoc::openapi());
     openapi.merge(LogsApiDoc::openapi());
 
-    let ws_routes = axum::Router::new().nest("/rides", k_rides::vrp::realtime::routes(state.clone()));
+    let ws_routes =
+        axum::Router::new().nest("/rides", k_rides::vrp::realtime::routes(state.clone()));
 
     let api = axum::Router::new()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi))

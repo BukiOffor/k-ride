@@ -21,12 +21,11 @@
 //!    - Clean disconnect or sudden drop (TTL expiry):
 //!    - Mailbox removed from DashMap; driver removed from Redis spatial map.
 
-use crate::auth::jwt::Claims;
 use crate::AppState;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        State,
+        Path, Query, State,
     },
     response::IntoResponse,
     routing::get,
@@ -251,26 +250,50 @@ impl WsRegistry {
     }
 }
 
-/// WebSocket route definition: GET /rides/ws
+#[derive(Debug, Deserialize, Default)]
+pub struct WsQuery {
+    pub driver_id: Option<Uuid>,
+    pub user_id: Option<Uuid>,
+}
+
+/// WebSocket route definitions:
+/// - GET /rides/ws
+/// - GET /rides/ws/{driver_id}
 pub fn routes(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/ws", get(ws_handler))
+        .route("/ws/{driver_id}", get(ws_handler_with_path))
         .with_state(state)
 }
 
-/// WebSocket Upgrade Handler. Authenticates via session cookie or Bearer token Claims.
+/// WebSocket Upgrade Handler with no authorization.
+/// Driver ID can be provided via query parameter `?driver_id=...`.
 pub async fn ws_handler(
     State(state): State<Arc<AppState>>,
-    claims: Claims,
+    Query(query): Query<WsQuery>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(state, claims, socket))
+    let (user_id, is_driver) = if let Some(driver_id) = query.driver_id {
+        (driver_id, true)
+    } else if let Some(user_id) = query.user_id {
+        (user_id, false)
+    } else {
+        (Uuid::now_v7(), false)
+    };
+    ws.on_upgrade(move |socket| handle_socket(state, user_id, is_driver, socket))
+}
+
+/// WebSocket Upgrade Handler with driver ID directly in path: GET /rides/ws/{driver_id}
+pub async fn ws_handler_with_path(
+    State(state): State<Arc<AppState>>,
+    Path(driver_id): Path<Uuid>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_socket(state, driver_id, true, socket))
 }
 
 /// Handles the upgraded WebSocket connection across the 4 phases.
-async fn handle_socket(state: Arc<AppState>, claims: Claims, socket: WebSocket) {
-    let user_id = claims.user_id;
-    let is_driver = claims.role == crate::users::RoleType::Driver;
+async fn handle_socket(state: Arc<AppState>, user_id: Uuid, is_driver: bool, socket: WebSocket) {
 
     // Phase 1: Splitting the line into Incoming Listener and Outgoing Speaker
     let (mut ws_sender, mut ws_receiver) = socket.split();
