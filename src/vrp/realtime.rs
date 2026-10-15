@@ -85,6 +85,10 @@ pub struct WsRegistry {
     pub drivers: Arc<DashMap<Uuid, mpsc::Sender<OutgoingWsMessage>>>,
     /// Ride ID -> Broadcast Channel for active ride updates
     pub ride_channels: Arc<DashMap<Uuid, broadcast::Sender<WsEventFrame>>>,
+    /// Driver ID -> Online availability in RAM
+    pub driver_online: Arc<DashMap<Uuid, bool>>,
+    /// Driver ID -> Current Active Ride ID in RAM
+    pub driver_active_rides: Arc<DashMap<Uuid, Uuid>>,
 }
 
 impl WsRegistry {
@@ -92,6 +96,8 @@ impl WsRegistry {
         Self {
             drivers: Arc::new(DashMap::new()),
             ride_channels: Arc::new(DashMap::new()),
+            driver_online: Arc::new(DashMap::new()),
+            driver_active_rides: Arc::new(DashMap::new()),
         }
     }
 
@@ -101,7 +107,35 @@ impl WsRegistry {
         tracing::info!("Registered driver in DashMap mailbox: {}", driver_id);
     }
 
-    /// Phase 4: Unregisters a driver's mailbox from RAM when going offline or disconnecting.
+    /// Sets driver online availability in memory.
+    pub fn set_driver_online(&self, driver_id: Uuid, online: bool) {
+        if online {
+            self.driver_online.insert(driver_id, true);
+        } else {
+            self.driver_online.remove(&driver_id);
+        }
+    }
+
+    /// Checks if driver is marked online in memory.
+    pub fn is_driver_online(&self, driver_id: &Uuid) -> bool {
+        self.driver_online.get(driver_id).map(|v| *v).unwrap_or(false)
+    }
+
+    /// Sets or clears the active ride for a driver in memory.
+    pub fn set_driver_active_ride(&self, driver_id: Uuid, ride_id: Option<Uuid>) {
+        if let Some(id) = ride_id {
+            self.driver_active_rides.insert(driver_id, id);
+        } else {
+            self.driver_active_rides.remove(&driver_id);
+        }
+    }
+
+    /// Returns the driver's current active ride ID if in memory.
+    pub fn get_driver_active_ride(&self, driver_id: &Uuid) -> Option<Uuid> {
+        self.driver_active_rides.get(driver_id).map(|v| *v)
+    }
+
+    /// Phase 4: Unregisters a driver's mailbox from RAM when disconnecting.
     pub fn unregister_driver(&self, driver_id: &Uuid) {
         if self.drivers.remove(driver_id).is_some() {
             tracing::info!("Unregistered driver from DashMap: {}", driver_id);
@@ -207,64 +241,36 @@ async fn handle_socket(state: Arc<AppState>, claims: Claims, socket: WebSocket) 
                             let _ = outgoing_tx.send(OutgoingWsMessage::Pong).await;
                         }
                         IncomingWsFrame::Location { location } => {
-                            // Phase 2: 4-Second Location Heartbeat
+                            // Phase 2: 4-Second Location Heartbeat (IN-MEMORY & REDIS ONLY, NO DB QUERIES)
                             if is_driver {
-                                if let Ok(mut conn) = app_state_clone.pool.get().await {
-                                    use crate::schema::{driver_availability, rides};
-                                    use crate::vrp::models::rides::RideStatus;
-                                    use diesel::prelude::*;
-                                    use diesel_async::RunQueryDsl;
+                                // Only ingest into Redis spatial matching pool if driver is currently marked ONLINE in RAM
+                                if app_state_clone.ws_registry.is_driver_online(&user_id) {
+                                    let driver_state = dispatcher::DriverState {
+                                        driver_id: user_id.to_string(),
+                                        lat: location.point.lat,
+                                        lng: location.point.lng,
+                                        available_seats: 4,
+                                    };
 
-                                    let status_str: Option<String> = driver_availability::table
-                                        .filter(driver_availability::driver_id.eq(user_id))
-                                        .select(driver_availability::status)
-                                        .first::<String>(&mut conn)
-                                        .await
-                                        .optional()
-                                        .unwrap_or(None);
+                                    let _ = dispatcher.ingest_driver_location(&driver_state).await;
+                                }
 
-                                    // Only ingest into Redis spatial matching pool if driver is currently marked ONLINE
-                                    if status_str.as_deref() == Some("ONLINE") {
-                                        let driver_state = dispatcher::DriverState {
-                                            driver_id: user_id.to_string(),
-                                            lat: location.point.lat,
-                                            lng: location.point.lng,
-                                            available_seats: 4,
-                                        };
-
-                                        let _ = dispatcher.ingest_driver_location(&driver_state).await;
-                                    }
-
-                                    // Broadcast location update if driver has an active ride
-                                    let active_ride_id: Option<Uuid> = rides::table
-                                        .filter(rides::driver_id.eq(user_id))
-                                        .filter(rides::status.eq_any(vec![
-                                            RideStatus::DriverAssigned.to_string(),
-                                            RideStatus::DriverArrived.to_string(),
-                                            RideStatus::InProgress.to_string(),
-                                        ]))
-                                        .select(rides::id)
-                                        .first::<Uuid>(&mut conn)
-                                        .await
-                                        .optional()
-                                        .unwrap_or(None);
-
-                                    if let Some(ride_id) = active_ride_id {
-                                        let loc_event = WsEventFrame {
-                                            id: format!("evt_{}", Uuid::now_v7()),
-                                            ride_id: Some(ride_id),
-                                            seq: 1,
-                                            ride_version: None,
-                                            occurred_at: chrono::Utc::now().to_rfc3339(),
-                                            payload: serde_json::json!({
-                                                "type": "ride.driver.location_updated",
-                                                "location": location,
-                                            }),
-                                        };
-                                        app_state_clone
-                                            .ws_registry
-                                            .broadcast_ride_event(ride_id, loc_event);
-                                    }
+                                // Broadcast location update if driver has an active ride in RAM
+                                if let Some(ride_id) = app_state_clone.ws_registry.get_driver_active_ride(&user_id) {
+                                    let loc_event = WsEventFrame {
+                                        id: format!("evt_{}", Uuid::now_v7()),
+                                        ride_id: Some(ride_id),
+                                        seq: 1,
+                                        ride_version: None,
+                                        occurred_at: chrono::Utc::now().to_rfc3339(),
+                                        payload: serde_json::json!({
+                                            "type": "ride.driver.location_updated",
+                                            "location": location,
+                                        }),
+                                    };
+                                    app_state_clone
+                                        .ws_registry
+                                        .broadcast_ride_event(ride_id, loc_event);
                                 }
                             }
                         }
@@ -272,6 +278,9 @@ async fn handle_socket(state: Arc<AppState>, claims: Claims, socket: WebSocket) 
                             tracing::debug!("User {} subscribed to {}", user_id, channel);
                             if channel.starts_with("ride:") {
                                 if let Ok(ride_id) = Uuid::parse_str(&channel[5..]) {
+                                    if is_driver {
+                                        app_state_clone.ws_registry.set_driver_active_ride(user_id, Some(ride_id));
+                                    }
                                     if !ride_subscriptions.contains_key(&ride_id) {
                                         let mut rx = app_state_clone
                                             .ws_registry
@@ -298,6 +307,9 @@ async fn handle_socket(state: Arc<AppState>, claims: Claims, socket: WebSocket) 
                             tracing::debug!("User {} unsubscribed from {}", user_id, channel);
                             if channel.starts_with("ride:") {
                                 if let Ok(ride_id) = Uuid::parse_str(&channel[5..]) {
+                                    if is_driver && app_state_clone.ws_registry.get_driver_active_ride(&user_id) == Some(ride_id) {
+                                        app_state_clone.ws_registry.set_driver_active_ride(user_id, None);
+                                    }
                                     if let Some(handle) = ride_subscriptions.remove(&ride_id) {
                                         handle.abort();
                                     }
@@ -316,31 +328,10 @@ async fn handle_socket(state: Arc<AppState>, claims: Claims, socket: WebSocket) 
         handle.abort();
     }
 
-    // Phase 4: Driver Goes Offline (Cleanup on disconnect)
+    // Phase 4: Cleanup on disconnect
     if is_driver {
-        // 1. Unregister mailbox from RAM (DashMap)
+        // Unregister mailbox from RAM (DashMap)
         app_state_clone.ws_registry.unregister_driver(&user_id);
-
-        // 2. Remove driver pin from Redis virtual map
-        let mut d = (*app_state_clone.dispatcher).clone();
-        let _ = d.remove_driver(&user_id.to_string()).await;
-
-        // 3. Mark offline in DB if not on a trip
-        if let Ok(mut conn) = app_state_clone.pool.get().await {
-            use diesel::prelude::*;
-            use diesel_async::RunQueryDsl;
-            let _ = diesel::update(
-                crate::schema::driver_availability::table
-                    .filter(crate::schema::driver_availability::driver_id.eq(user_id))
-                    .filter(crate::schema::driver_availability::status.ne("ON_TRIP")),
-            )
-            .set((
-                crate::schema::driver_availability::status.eq(crate::vrp::models::rides::AvailabilityStatus::Offline.to_string()),
-                crate::schema::driver_availability::updated_at.eq(chrono::Utc::now().naive_utc()),
-            ))
-            .execute(&mut conn)
-            .await;
-        }
     }
 
     send_task.abort();

@@ -152,10 +152,16 @@ pub async fn set_driver_availability(
             "availability": avail_view,
         }),
     };
-    let _ = app_state
+    let res = app_state
         .ws_registry
         .send_to_driver(&claims.user_id, OutgoingWsMessage::Event { event: avail_evt })
         .await;
+
+    if let Err(e) = res {
+        tracing::error!("Failed to send driver.availability.changed event: {}", e);
+    };
+
+    app_state.ws_registry.set_driver_online(claims.user_id, payload.online);
 
     Ok(AvailabilityEnvelope {
         availability: avail_view,
@@ -339,6 +345,8 @@ pub async fn accept_ride_offer(
         }),
     };
     app_state.ws_registry.broadcast_ride_event(ride.id, evt);
+    app_state.ws_registry.set_driver_active_ride(claims.user_id, Some(ride.id));
+    app_state.ws_registry.set_driver_online(claims.user_id, false);
 
     Ok(proj)
 }
@@ -542,6 +550,9 @@ pub async fn complete_ride(
         .execute(&mut conn)
         .await;
 
+    app_state.ws_registry.set_driver_active_ride(claims.user_id, None);
+    app_state.ws_registry.set_driver_online(claims.user_id, true);
+
     let proj = build_ride_projection(&mut conn, &updated, claims.user_id, true).await?;
 
     let evt = WsEventFrame {
@@ -612,6 +623,9 @@ pub async fn driver_cancel_ride(
         ))
         .execute(&mut conn)
         .await;
+
+    app_state.ws_registry.set_driver_active_ride(claims.user_id, None);
+    app_state.ws_registry.set_driver_online(claims.user_id, true);
 
     // Trigger re-dispatch
     let bg_state = app_state.clone();

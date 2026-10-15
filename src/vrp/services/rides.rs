@@ -454,6 +454,9 @@ pub async fn cancel_ride_passenger(
             ))
             .execute(&mut conn)
             .await;
+
+        app_state.ws_registry.set_driver_active_ride(did, None);
+        app_state.ws_registry.set_driver_online(did, true);
     }
 
     let proj = build_ride_projection(&mut conn, &updated, claims.user_id, false).await?;
