@@ -125,7 +125,10 @@ pub async fn cancel_booking(
     claims: Claims,
     Path(booking_id): Path<Uuid>,
 ) -> Result<Json<Message<Booking>>, ApiError> {
-    let is_admin = matches!(claims.role, RoleType::Admin | RoleType::Root);
+    let is_admin = matches!(
+        claims.role,
+        RoleType::Admin | RoleType::Root | RoleType::RouteCoordinator
+    );
     let booking =
         services::bookings::cancel_booking(state, booking_id, claims.user_id, is_admin).await?;
     let response = Message::context("Booking cancelled successfully.", booking);
@@ -222,7 +225,10 @@ pub async fn get_booking_by_id(
     claims: Claims,
     Path(booking_id): Path<Uuid>,
 ) -> Result<Json<Message<Booking>>, ApiError> {
-    let is_admin = matches!(claims.role, RoleType::Admin | RoleType::Root);
+    let is_admin = matches!(
+        claims.role,
+        RoleType::Admin | RoleType::Root | RoleType::RouteCoordinator
+    );
     let booking =
         services::bookings::get_booking_by_id(state, booking_id, claims.user_id, is_admin).await?;
     let response = Message::context("Booking retrieved successfully.", booking);
@@ -362,7 +368,10 @@ pub async fn get_booking_qr(
     claims: Claims,
     Path(booking_id): Path<Uuid>,
 ) -> Result<Json<Message<BookingQrCodeResponse>>, ApiError> {
-    let is_admin = matches!(claims.role, RoleType::Admin | RoleType::Root);
+    let is_admin = matches!(
+        claims.role,
+        RoleType::Admin | RoleType::Root | RoleType::RouteCoordinator
+    );
     let qr = services::bookings::generate_booking_qr(state, booking_id, claims.user_id, is_admin)
         .await?;
     let response = Message::context("QR code generated successfully.", qr);

@@ -52,6 +52,13 @@ pub struct User {
 pub enum RoleType {
     Root,
     Admin,
+    #[serde(
+        alias = "route_coordinator",
+        alias = "Route Coordinator",
+        alias = "routeCoordinator",
+        alias = "Coordinator",
+        alias = "coordinator"
+    )]
     RouteCoordinator,
     User,
     Driver,
@@ -60,11 +67,16 @@ pub enum RoleType {
 impl FromSql<Text, diesel::pg::Pg> for RoleType {
     fn from_sql(bytes: diesel::pg::PgValue<'_>) -> deserialize::Result<Self> {
         match std::str::from_utf8(bytes.as_bytes())? {
-            "Admin" => Ok(RoleType::Admin),
-            "RouteCoordinator" => Ok(RoleType::RouteCoordinator),
-            "Driver" => Ok(RoleType::Driver),
-            "Root" => Ok(RoleType::Root),
-            "User" => Ok(RoleType::User),
+            "Admin" | "admin" => Ok(RoleType::Admin),
+            "RouteCoordinator"
+            | "route_coordinator"
+            | "Route Coordinator"
+            | "routeCoordinator"
+            | "Coordinator"
+            | "coordinator" => Ok(RoleType::RouteCoordinator),
+            "Driver" | "driver" => Ok(RoleType::Driver),
+            "Root" | "root" => Ok(RoleType::Root),
+            "User" | "user" => Ok(RoleType::User),
             s => Err(format!("Unrecognized role type: {}", s).into()),
         }
     }
