@@ -1,3 +1,4 @@
+use axum::extract::DefaultBodyLimit;
 use axum::http::{Method, header::*};
 use diesel_migrations::{EmbeddedMigrations, embed_migrations};
 use dispatcher::RideDispatcher;
@@ -9,11 +10,15 @@ use k_rides::users::swagger::UsersApiDoc;
 use k_rides::vrp::swagger::VrpApiDoc;
 use redis::aio::ConnectionManager;
 use std::sync::Arc;
-use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
+use tower_http::{
+    compression::CompressionLayer, cors::CorsLayer, limit::RequestBodyLimitLayer, trace::TraceLayer,
+};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
+/// Maximum allowed request payload size (10 MB).
+pub const MAX_PAYLOAD_SIZE: usize = 10 * 1024 * 1024;
 
 #[tokio::main]
 async fn main() {
@@ -115,7 +120,9 @@ async fn main() {
     let api = axum::Router::new()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi))
         .nest("/api/v1", app)
-        .merge(ws_routes);
+        .merge(ws_routes)
+        .layer(DefaultBodyLimit::max(MAX_PAYLOAD_SIZE))
+        .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_SIZE));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:9990").await.unwrap();
     k_rides::info!("Listening on {}", listener.local_addr().unwrap());
