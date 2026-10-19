@@ -15,6 +15,9 @@ const VENUE_RESOLUTION: Resolution = Resolution::Six;
 /// A driver is considered offline if it hasn't pinged for this many seconds (15-second dead-man's switch).
 const DRIVER_TTL_SECS: u64 = 15;
 
+/// Global sorted set of every live driver, scored by last-seen time (used for fleet-wide views).
+const LIVE_DRIVERS_KEY: &str = "drivers:live";
+
 
 impl RideDispatcher {
     pub fn new(redis: ConnectionManager) -> Self {
@@ -46,6 +49,7 @@ impl RideDispatcher {
             pipe.zrem(cell_active_key(&cell), driver_id).ignore();
         }
 
+        pipe.zrem(LIVE_DRIVERS_KEY, driver_id).ignore();
         pipe.del(&driver_key).ignore();
         pipe.del(&driver_cell_key).ignore();
 
@@ -94,11 +98,48 @@ impl RideDispatcher {
             .ignore()
             // 5. Let empty cells disappear eventually (garbage collection only)
             .expire(&active_key, DRIVER_TTL_SECS as i64)
+            .ignore()
+            // 6. Track the driver in the global live set (fleet-wide map view)
+            .zadd(LIVE_DRIVERS_KEY, &driver.driver_id, now_secs())
             .ignore();
 
         let _: () = pipe.query_async(&mut self.redis).await?;
 
         Ok(())
+    }
+
+    /// Returns every live driver (pinged within the TTL window) with their last-seen
+    /// Unix timestamp in seconds. Stale entries are pruned on read.
+    pub async fn list_live_drivers(
+        &mut self,
+    ) -> Result<Vec<(DriverState, f64)>, Box<dyn std::error::Error>> {
+        let cutoff = now_secs() - DRIVER_TTL_SECS as f64;
+
+        let (entries,): (Vec<(String, f64)>,) = redis::pipe()
+            .zrembyscore(LIVE_DRIVERS_KEY, "-inf", cutoff)
+            .ignore()
+            .zrangebyscore_withscores(LIVE_DRIVERS_KEY, cutoff, "+inf")
+            .query_async(&mut self.redis)
+            .await?;
+
+        if entries.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let keys: Vec<String> = entries
+            .iter()
+            .map(|(id, _)| format!("driver:state:{}", id))
+            .collect();
+        let raw_states: Vec<Option<Vec<u8>>> = self.redis.mget(&keys).await?;
+
+        Ok(entries
+            .into_iter()
+            .zip(raw_states)
+            .filter_map(|((_, last_seen), raw)| {
+                let state = bincode::deserialize::<DriverState>(&raw?).ok()?;
+                Some((state, last_seen))
+            })
+            .collect())
     }
 
     /// Finds candidate drivers in the pickup cell and k concentric neighbor rings.

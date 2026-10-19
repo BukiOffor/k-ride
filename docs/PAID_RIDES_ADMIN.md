@@ -104,6 +104,7 @@ verified vehicle to go online.
 | Method | Path | Body / notes |
 | --- | --- | --- |
 | GET | `/admin/drivers` | `q` (name/email/plate), `track`, `availability`, `verification`, `flagged`, `active`, pagination |
+| GET | `/admin/drivers/live` | Online drivers with latest position, heading/speed and current ride; unpaginated. See [ADMIN_LIVE_DRIVERS.md](ADMIN_LIVE_DRIVERS.md) |
 | GET | `/admin/drivers/{id}` | Identity, vehicle, inspection, affiliation, rating, trip and weekly earning totals |
 | GET | `/admin/drivers/{id}/rides` | That driver's own history, pagination |
 | POST / DELETE | `/admin/drivers/{id}/flag` | POST `{ reason }`; DELETE clears open manual flag |

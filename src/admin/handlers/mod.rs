@@ -45,6 +45,7 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
         .route("/incidents/{id}/notes", post(safety::add_note))
         .route("/incidents/{id}/calls", post(safety::log_call))
         .route("/drivers", get(people::drivers))
+        .route("/drivers/live", get(people::live_drivers))
         .route("/drivers/{id}", get(people::driver))
         .route("/drivers/{id}/rides", get(people::driver_rides))
         .route(

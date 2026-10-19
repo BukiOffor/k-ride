@@ -186,3 +186,58 @@ pub async fn requests_restricted(db: &mut Connection<'_>, id: Uuid) -> Result<bo
     let row=diesel::sql_query("SELECT jsonb_build_object('restricted',COALESCE((SELECT restricted FROM admin_user_state WHERE user_id=$1),false)) AS data").bind::<SqlUuid,_>(id).get_result::<Row>(db).await?;
     Ok(row.data["restricted"].as_bool().unwrap_or(false))
 }
+
+/// List every driver currently live in the dispatch index with their latest position.
+///
+/// Positions come from Redis (in-memory, updated on every ping); identity, heading/speed
+/// and current-ride details are enriched from Postgres in a single query.
+pub async fn live_drivers(s: Arc<AppState>, c: Claims) -> Result<Value, AdminError> {
+    require_admin(&c)?;
+    let mut dispatcher = (*s.dispatcher).clone();
+    let live = dispatcher.list_live_drivers().await.map_err(|e| {
+        tracing::error!(error=%e,"Failed to read live drivers from dispatch index");
+        AdminError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "dispatch_unavailable",
+            "Live driver index unavailable".into(),
+        )
+    })?;
+
+    let drivers: Vec<Value> = live
+        .into_iter()
+        .filter(|(d, _)| Uuid::parse_str(&d.driver_id).is_ok())
+        .map(|(d, last_seen)| {
+            let last_seen_at = chrono::DateTime::from_timestamp_millis((last_seen * 1000.0) as i64)
+                .map(|t| t.to_rfc3339());
+            json!({"driverId":d.driver_id,"lat":d.lat,"lng":d.lng,"availableSeats":d.available_seats,"lastSeenAt":last_seen_at})
+        })
+        .collect();
+
+    if drivers.is_empty() {
+        return Ok(json!({"items":[],"total":0}));
+    }
+
+    let mut db = connection(&s).await?;
+    query(
+        &mut db,
+        "SELECT jsonb_build_object('items',COALESCE(jsonb_agg(jsonb_build_object(\
+            'driverId',u.id,\
+            'displayName',trim(concat_ws(' ',u.first_name,u.last_name)),\
+            'phone',u.phone,\
+            'lat',(d->>'lat')::float8,\
+            'lng',(d->>'lng')::float8,\
+            'heading',a.heading,\
+            'speedMps',a.speed_mps,\
+            'availableSeats',(d->>'availableSeats')::int,\
+            'lastSeenAt',d->>'lastSeenAt',\
+            'currentRide',(SELECT jsonb_build_object('rideId',r.id,'status',r.status) FROM rides r WHERE r.driver_id=u.id AND r.status IN ('DRIVER_ASSIGNED','DRIVER_EN_ROUTE','DRIVER_ARRIVING','DRIVER_ARRIVED','IN_PROGRESS','PAUSED') ORDER BY r.created_at DESC LIMIT 1)\
+        ) ORDER BY u.first_name,u.last_name),'[]'::jsonb),'total',count(u.id)) AS data \
+        FROM jsonb_array_elements($1->'drivers') d \
+        JOIN users u ON u.id=(d->>'driverId')::uuid AND u.is_active \
+        LEFT JOIN driver_availability a ON a.driver_id=u.id \
+        WHERE $2 IS NOT NULL",
+        json!({"drivers":drivers}),
+        c.user_id,
+    )
+    .await
+}

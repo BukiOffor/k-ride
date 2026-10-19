@@ -11,6 +11,15 @@ pub async fn drivers(
     Ok(Json(services::people::drivers(s, c, f).await?))
 }
 
+/// List all drivers currently live in the dispatch index with their latest coordinates.
+#[utoipa::path(get,path="/admin/drivers/live",tag="Paid Rides Admin",security(("bearerAuth"=[]),("cookieAuth"=[])),responses((status=200,description="Live drivers with latest position",body=serde_json::Value),(status=403,description="Admin or Root required"),(status=503,description="Live driver index unavailable")))]
+pub async fn live_drivers(
+    State(s): State<Arc<AppState>>,
+    c: Claims,
+) -> Result<Json<Value>, AdminError> {
+    Ok(Json(services::people::live_drivers(s, c).await?))
+}
+
 /// List passengers with membership, ride and trusted-contact summaries.
 #[utoipa::path(get,path="/admin/passengers",tag="Paid Rides Admin",security(("bearerAuth"=[]),("cookieAuth"=[])),responses((status=200,description="Success",body=dto::Page<dto::PersonSummary>),(status=400,description="Invalid request"),(status=403,description="Admin or Root required"),(status=404,description="Not found"),(status=409,description="Workflow conflict")),params(("q"=Option<String>,Query),("membership"=Option<String>,Query),("hasTrustedContact"=Option<bool>,Query),("cursor"=Option<Uuid>,Query),("limit"=Option<i64>,Query)))]
 pub async fn passengers(
