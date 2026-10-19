@@ -19,6 +19,22 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 // =========================================================================================
+// Dispatch Configuration
+// =========================================================================================
+
+/// Maximum road distance (metres) between a driver and the pickup point to be considered.
+pub const DISPATCH_RADIUS_M: f64 = 10_000.0;
+
+/// Public OSRM demo server, used when `OSRM_URL` is not set.
+const DEFAULT_OSRM_URL: &str = "http://router.project-osrm.org";
+
+/// OSRM base URL used to rank candidate drivers by driving ETA.
+/// Falls back to Haversine distance inside the dispatcher if OSRM is unreachable.
+fn osrm_url() -> String {
+    std::env::var("OSRM_URL").unwrap_or_else(|_| DEFAULT_OSRM_URL.to_string())
+}
+
+// =========================================================================================
 // Idempotency Helpers
 // =========================================================================================
 
@@ -116,18 +132,32 @@ pub async fn estimate_fare(
     // 3. For each product, calculate FareQuote and check candidate drivers nearby
     let mut estimate_options = Vec::new();
 
-    // Query candidates nearby using dispatcher
+    // Query drivers within the dispatch radius, ranked by OSRM driving ETA (Haversine fallback)
     let mut dispatcher = (*app_state.dispatcher).clone();
+    let osrm = osrm_url();
     let candidates = dispatcher
-        .query_candidates(payload.pickup.point.lat, payload.pickup.point.lng, 2)
+        .query_within_radius_routed(
+            payload.pickup.point.lat,
+            payload.pickup.point.lng,
+            DISPATCH_RADIUS_M,
+            Some(&osrm),
+        )
         .await
         .unwrap_or_default();
+
+    // Nearest driver's ETA to pickup (results are sorted nearest first).
+    // Without an OSRM duration, estimate from distance at ~30 km/h urban speed.
+    let nearest_pickup_eta_seconds = candidates.get(0).map(|c| {
+        c.duration_secs
+            .unwrap_or(c.distance_m / (30_000.0 / 3600.0))
+            .round() as i64
+    });
 
     for opt in active_options {
         let fare_quote = calculate_fare_quote(&opt, route.distance_meters, route.duration_seconds);
 
-        let available = !candidates.is_empty();
-        let pickup_eta_seconds = if available { Some(300) } else { None };
+        let available = nearest_pickup_eta_seconds.is_some();
+        let pickup_eta_seconds = nearest_pickup_eta_seconds;
 
         estimate_options.push(EstimateOption {
             option: RideOptionView::from(opt.clone()),
@@ -959,10 +989,16 @@ pub async fn dispatch_ride_candidates(
         rating: Some(5.0),
     };
 
-    // Query online drivers using H3 spatial index within 5km radius
+    // Query online drivers within the dispatch radius, ranked by OSRM driving ETA
     let mut dispatcher = (*app_state.dispatcher).clone();
+    let osrm = osrm_url();
     let candidates = dispatcher
-        .query_within_radius_routed(pickup.point.lat, pickup.point.lng, 5000.0, None)
+        .query_within_radius_routed(
+            pickup.point.lat,
+            pickup.point.lng,
+            DISPATCH_RADIUS_M,
+            Some(&osrm),
+        )
         .await
         .unwrap_or_default();
 
