@@ -468,3 +468,10 @@ sequenceDiagram
 | `IN_PROGRESS` | No | `COMPLETED` (cannot cancel once started) |
 | `COMPLETED` | Yes | Terminal |
 | `CANCELLED` | Yes | Terminal |
+
+## Paid Rides administration
+
+The authenticated `/api/v1/admin` network, verification, safety, people, quality,
+and reporting APIs are documented in [docs/PAID_RIDES_ADMIN.md](docs/PAID_RIDES_ADMIN.md)
+and included in Swagger. The WebSocket now requires a JWT/cookie and authorizes
+ride subscriptions; query/path user IDs cannot override authenticated identity.

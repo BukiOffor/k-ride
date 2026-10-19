@@ -33,7 +33,10 @@ pub struct User {
     pub updated_at: NaiveDateTime,
     pub last_seen: NaiveDateTime,
     pub city: String,
-    pub car: Option<Uuid>
+    pub car: Option<Uuid>,
+    pub account_number: Option<String>,
+    pub bank_name: Option<String>
+    
 }
 
 #[derive(

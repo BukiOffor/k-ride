@@ -97,13 +97,14 @@ pub async fn estimate_fare(
         .map_err(|e| ModuleError::InternalError(e.to_string().into()))?;
 
     if active_options.is_empty() {
-        return Err(ModuleError::Error("No active ride products configured".into()));
+        return Err(ModuleError::Error(
+            "No active ride products configured".into(),
+        ));
     }
 
     // 2. Compute dynamic route using HTTP client
     let client = reqwest::Client::new();
-    let route_res =
-        compute_route(&client, &payload.pickup.point, &payload.destination.point).await;
+    let route_res = compute_route(&client, &payload.pickup.point, &payload.destination.point).await;
 
     let route = Route {
         points: route_res.points,
@@ -123,8 +124,7 @@ pub async fn estimate_fare(
         .unwrap_or_default();
 
     for opt in active_options {
-        let fare_quote =
-            calculate_fare_quote(&opt, route.distance_meters, route.duration_seconds);
+        let fare_quote = calculate_fare_quote(&opt, route.distance_meters, route.duration_seconds);
 
         let available = !candidates.is_empty();
         let pickup_eta_seconds = if available { Some(300) } else { None };
@@ -181,6 +181,10 @@ pub async fn request_ride(
         .get()
         .await
         .map_err(|e| ModuleError::InternalError(e.to_string().into()))?;
+
+    if crate::admin::requests_restricted(&mut conn, claims.user_id).await? {
+        return Err(ModuleError::RequestsRestricted);
+    }
 
     // Check if passenger already has a live ride
     let existing_live: Option<Ride> = rides::table
@@ -387,7 +391,9 @@ pub async fn cancel_ride_passenger(
     }
 
     if !ride.status.can_transition_to(RideStatus::Cancelled) {
-        return Err(ModuleError::NotAllowed("Cannot cancel ride in its current state"));
+        return Err(ModuleError::NotAllowed(
+            "Cannot cancel ride in its current state",
+        ));
     }
 
     // In v1, cash only, no cancellation fees
@@ -432,7 +438,12 @@ pub async fn cancel_ride_passenger(
         };
         let _ = app_state
             .ws_registry
-            .send_to_driver(&o.driver_id, OutgoingWsMessage::Event { event: withdrawn_evt })
+            .send_to_driver(
+                &o.driver_id,
+                OutgoingWsMessage::Event {
+                    event: withdrawn_evt,
+                },
+            )
             .await;
     }
 
@@ -447,13 +458,15 @@ pub async fn cancel_ride_passenger(
 
     // Free driver if assigned
     if let Some(did) = updated.driver_id {
-        let _ = diesel::update(driver_availability::table.filter(driver_availability::driver_id.eq(did)))
-            .set((
-                driver_availability::status.eq(AvailabilityStatus::Online.to_string()),
-                driver_availability::updated_at.eq(Utc::now().naive_utc()),
-            ))
-            .execute(&mut conn)
-            .await;
+        let _ = diesel::update(
+            driver_availability::table.filter(driver_availability::driver_id.eq(did)),
+        )
+        .set((
+            driver_availability::status.eq(AvailabilityStatus::Online.to_string()),
+            driver_availability::updated_at.eq(Utc::now().naive_utc()),
+        ))
+        .execute(&mut conn)
+        .await;
 
         app_state.ws_registry.set_driver_active_ride(did, None);
         app_state.ws_registry.set_driver_online(did, true);
@@ -502,7 +515,9 @@ pub async fn retry_ride_search(
     }
 
     if ride.status != RideStatus::NoDrivers {
-        return Err(ModuleError::NotAllowed("Can only retry search when status is NO_DRIVERS"));
+        return Err(ModuleError::NotAllowed(
+            "Can only retry search when status is NO_DRIVERS",
+        ));
     }
 
     let updated: Ride = diesel::update(rides::table.filter(rides::id.eq(ride_id)))
@@ -570,7 +585,8 @@ pub async fn rate_ride(
     let is_passenger = ride.passenger_id == claims.user_id;
     let rater_role = if is_passenger { "passenger" } else { "driver" };
     let ratee_id = if is_passenger {
-        ride.driver_id.ok_or(ModuleError::BadRequest("No driver to rate"))?
+        ride.driver_id
+            .ok_or(ModuleError::BadRequest("No driver to rate"))?
     } else {
         ride.passenger_id
     };
@@ -677,8 +693,6 @@ pub async fn get_passenger_history(
     })
 }
 
-
-
 // =========================================================================================
 // Viewer & Safety
 // =========================================================================================
@@ -732,6 +746,9 @@ pub async fn report_sos(
         .map_err(|e| ModuleError::InternalError(e.to_string().into()))?
         .ok_or(ModuleError::NotFoundError("Ride not found".into()))?;
 
+    if ride.passenger_id != claims.user_id && ride.driver_id != Some(claims.user_id) {
+        return Err(ModuleError::PermissionDenied);
+    }
     let role = if ride.passenger_id == claims.user_id {
         "passenger"
     } else {
@@ -749,7 +766,10 @@ pub async fn report_sos(
         location: payload.location.and_then(|l| serde_json::to_value(l).ok()),
         driver_location: None,
         status: "sent".into(),
-        occurred_at: payload.occurred_at.map(|t| t.naive_utc()).unwrap_or_else(|| Utc::now().naive_utc()),
+        occurred_at: payload
+            .occurred_at
+            .map(|t| t.naive_utc())
+            .unwrap_or_else(|| Utc::now().naive_utc()),
         created_at: Utc::now().naive_utc(),
     };
 
@@ -759,11 +779,18 @@ pub async fn report_sos(
         .await
         .map_err(|e| ModuleError::InternalError(e.to_string().into()))?;
 
-    let _ = diesel::update(rides::table.filter(rides::id.eq(ride_id)))
-        .set(rides::sos_status.eq("sent"))
-        .execute(&mut conn)
-        .await;
-
+    app_state.ws_registry.broadcast_admin_event(
+        "admin:safety",
+        "incident.opened",
+        serde_json::json!({"id":record.id,"rideId":ride_id}),
+    );
+    if record.kind == "sos" {
+        app_state.ws_registry.broadcast_admin_event(
+            "admin:safety",
+            "sos.raised",
+            serde_json::json!({"id":record.id,"rideId":ride_id}),
+        );
+    }
     Ok(AcceptedDto { accepted: true })
 }
 
@@ -787,12 +814,27 @@ pub async fn report_safety_issue(
         .map_err(|e| ModuleError::InternalError(e.to_string().into()))?
         .ok_or(ModuleError::NotFoundError("Ride not found".into()))?;
 
+    if ride.passenger_id != claims.user_id && ride.driver_id != Some(claims.user_id) {
+        return Err(ModuleError::PermissionDenied);
+    }
     let role = if ride.passenger_id == claims.user_id {
         "passenger"
     } else {
         "driver"
     };
 
+    if ![
+        "SAFETY_CONCERN",
+        "DRIVER_CONDUCT",
+        "PASSENGER_CONDUCT",
+        "VEHICLE_ISSUE",
+        "PAYMENT_DISPUTE",
+        "OTHER",
+    ]
+    .contains(&payload.category.as_str())
+    {
+        return Err(ModuleError::BadRequest("Invalid safety report category"));
+    }
     let record = SafetyEventRecord {
         id: Uuid::now_v7(),
         ride_id,
@@ -814,6 +856,18 @@ pub async fn report_safety_issue(
         .await
         .map_err(|e| ModuleError::InternalError(e.to_string().into()))?;
 
+    app_state.ws_registry.broadcast_admin_event(
+        "admin:safety",
+        "incident.opened",
+        serde_json::json!({"id":record.id,"rideId":ride_id}),
+    );
+    if record.kind == "sos" {
+        app_state.ws_registry.broadcast_admin_event(
+            "admin:safety",
+            "sos.raised",
+            serde_json::json!({"id":record.id,"rideId":ride_id}),
+        );
+    }
     Ok(AcceptedDto { accepted: true })
 }
 
@@ -859,7 +913,11 @@ pub async fn dispatch_ride_candidates(
         .await
         .map_err(|e| ModuleError::InternalError(e.to_string().into()))?;
 
-    let ride: Ride = match rides::table.filter(rides::id.eq(ride_id)).first(&mut conn).await {
+    let ride: Ride = match rides::table
+        .filter(rides::id.eq(ride_id))
+        .first(&mut conn)
+        .await
+    {
         Ok(r) => r,
         Err(_) => return Ok(()),
     };
@@ -892,7 +950,11 @@ pub async fn dispatch_ride_candidates(
 
     let passenger = RideOfferPassenger {
         display_name: passenger_user
-            .map(|u| format!("{} {}", u.first_name, u.last_name).trim().to_string())
+            .map(|u| {
+                format!("{} {}", u.first_name, u.last_name)
+                    .trim()
+                    .to_string()
+            })
             .unwrap_or_else(|| "Passenger".into()),
         rating: Some(5.0),
     };
@@ -915,8 +977,14 @@ pub async fn dispatch_ride_candidates(
             .execute(&mut conn)
             .await;
 
-        if let Ok(updated_ride) = rides::table.filter(rides::id.eq(ride_id)).first(&mut conn).await {
-            if let Ok(proj) = build_ride_projection(&mut conn, &updated_ride, ride.passenger_id, false).await {
+        if let Ok(updated_ride) = rides::table
+            .filter(rides::id.eq(ride_id))
+            .first(&mut conn)
+            .await
+        {
+            if let Ok(proj) =
+                build_ride_projection(&mut conn, &updated_ride, ride.passenger_id, false).await
+            {
                 let evt = WsEventFrame {
                     id: format!("evt_{}", Uuid::now_v7()),
                     ride_id: Some(ride_id),
@@ -960,7 +1028,10 @@ pub async fn dispatch_ride_candidates(
 
             let offer_id = Uuid::now_v7();
             let pickup_dist_m = candidate.distance_m.round() as i64;
-            let pickup_eta_s = candidate.duration_secs.map(|s| s.round() as i64).unwrap_or(180);
+            let pickup_eta_s = candidate
+                .duration_secs
+                .map(|s| s.round() as i64)
+                .unwrap_or(180);
 
             let offer = RideOfferRecord {
                 id: offer_id,
@@ -1044,7 +1115,12 @@ pub async fn dispatch_ride_candidates(
                         };
                         let _ = bg_state
                             .ws_registry
-                            .send_to_driver(&driver_uuid, OutgoingWsMessage::Event { event: expired_event })
+                            .send_to_driver(
+                                &driver_uuid,
+                                OutgoingWsMessage::Event {
+                                    event: expired_event,
+                                },
+                            )
                             .await;
                     }
                 }

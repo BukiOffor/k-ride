@@ -16,10 +16,13 @@ pub struct CreateUserDto {
     pub country: String,
     pub city: Option<String>,
     pub password: String,
+    pub account_number: Option<String>,
+    pub bank_name: Option<String>,
     #[serde(default)]
     pub role: Option<RoleType>,
     #[serde(alias = "driver_profile", alias = "driver")]
     pub driver_details: Option<DriverRegistrationDto>,
+
 }
 
 impl TryFrom<CreateUserDto> for User {
@@ -53,6 +56,8 @@ impl TryFrom<CreateUserDto> for User {
             is_active: true,
             role,
             car: None,
+            account_number: dto.account_number,
+            bank_name: dto.bank_name,
             created_at: chrono::Utc::now().naive_utc(),
             updated_at: chrono::Utc::now().naive_utc(),
             last_seen: chrono::Utc::now().naive_utc(),
@@ -76,6 +81,8 @@ pub struct AdminCreateUserDto {
     pub car: Option<Uuid>,
     #[serde(alias = "driver_profile", alias = "driver")]
     pub driver_details: Option<DriverRegistrationDto>,
+    pub account_number: Option<String>,
+    pub bank_name: Option<String>,
 }
 
 impl TryFrom<AdminCreateUserDto> for User {
@@ -106,6 +113,8 @@ impl TryFrom<AdminCreateUserDto> for User {
             is_identity_verified: false,
             role: dto.role,
             is_active: dto.is_active.unwrap_or(true),
+            account_number: dto.account_number,
+            bank_name: dto.bank_name,
             created_at: chrono::Utc::now().naive_utc(),
             updated_at: chrono::Utc::now().naive_utc(),
             last_seen: chrono::Utc::now().naive_utc(),

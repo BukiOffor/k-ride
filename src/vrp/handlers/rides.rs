@@ -14,6 +14,16 @@ pub fn routes(state: Arc<AppState>) -> Router {
 pub fn module_routes(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/me", get(get_viewer))
+        .route("/me/driver-review", get(crate::admin::own_review))
+        .route("/me/notifications", get(crate::admin::notifications))
+        .route(
+            "/me/trusted-contacts",
+            get(crate::admin::contacts).post(crate::admin::add_contact),
+        )
+        .route(
+            "/me/trusted-contacts/{id}",
+            axum::routing::delete(crate::admin::remove_contact),
+        )
         .route("/estimate", post(estimate_fare))
         .route("/request", post(request_ride))
         .route("/current", get(get_current_ride))
@@ -25,10 +35,12 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
         .route("/{ride_id}/sos", post(report_sos))
         .route("/{ride_id}/safety-reports", post(report_safety_issue))
         .route("/{ride_id}/share-link", post(share_link))
-        .layer(tower::ServiceBuilder::new().layer(middleware::from_fn_with_state(
-            state.clone(),
-            crate::auth::middleware::authorize,
-        )))
+        .layer(
+            tower::ServiceBuilder::new().layer(middleware::from_fn_with_state(
+                state.clone(),
+                crate::auth::middleware::authorize,
+            )),
+        )
         .with_state(state)
 }
 
@@ -98,7 +110,8 @@ pub async fn request_ride(
             .await
             .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
         if let Some((_, cached_json)) =
-            services::rides::check_idempotency(&mut conn, claims.user_id, "/rides/request", key).await?
+            services::rides::check_idempotency(&mut conn, claims.user_id, "/rides/request", key)
+                .await?
         {
             if let Ok(cached_ride) = serde_json::from_value::<RideProjection>(cached_json) {
                 return Ok(Json(cached_ride));
@@ -265,9 +278,9 @@ pub async fn report_sos(
     claims: Claims,
     Path(ride_id): Path<Uuid>,
     Json(payload): Json<SosDto>,
-) -> Result<Json<AcceptedDto>, ApiError> {
+) -> Result<(axum::http::StatusCode, Json<AcceptedDto>), ApiError> {
     let res = services::rides::report_sos(state, claims, ride_id, payload).await?;
-    Ok(Json(res))
+    Ok((axum::http::StatusCode::ACCEPTED, Json(res)))
 }
 
 #[utoipa::path(
@@ -286,9 +299,9 @@ pub async fn report_safety_issue(
     claims: Claims,
     Path(ride_id): Path<Uuid>,
     Json(payload): Json<SafetyReportDto>,
-) -> Result<Json<AcceptedDto>, ApiError> {
+) -> Result<(axum::http::StatusCode, Json<AcceptedDto>), ApiError> {
     let res = services::rides::report_safety_issue(state, claims, ride_id, payload).await?;
-    Ok(Json(res))
+    Ok((axum::http::StatusCode::ACCEPTED, Json(res)))
 }
 
 #[utoipa::path(

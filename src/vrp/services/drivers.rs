@@ -1,5 +1,6 @@
 //! Services for Driver operations: availability, offers, active rides, lifecycle transitions, and location tracking.
 
+use crate::AppState;
 use crate::auth::jwt::Claims;
 use crate::errors::ModuleError;
 use crate::helpers::fares::calculate_waiting_charge;
@@ -8,7 +9,6 @@ use crate::vrp::dtos::rides::*;
 use crate::vrp::models::rides::*;
 use crate::vrp::realtime::{OutgoingWsMessage, WsEventFrame};
 use crate::vrp::services::rides::{build_ride_projection, dispatch_ride_candidates};
-use crate::AppState;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
@@ -81,7 +81,28 @@ pub async fn set_driver_availability(
 
     let user = user.ok_or(ModuleError::PermissionDenied)?;
     if payload.online && !user.is_active {
-        return Err(ModuleError::NotAllowed("Driver account is deactivated or suspended"));
+        return Err(ModuleError::NotAllowed(
+            "Driver account is deactivated or suspended",
+        ));
+    }
+
+    if payload.online {
+        use crate::schema::{cars, driver_profiles};
+        let approved = driver_profiles::table
+            .inner_join(cars::table)
+            .filter(driver_profiles::user_id.eq(claims.user_id))
+            .filter(driver_profiles::status.eq("APPROVED"))
+            .filter(cars::is_verified.eq(true))
+            .select(driver_profiles::id)
+            .first::<Uuid>(&mut conn)
+            .await
+            .optional()?
+            .is_some();
+        if !approved {
+            return Err(ModuleError::NotAllowed(
+                "Driver application and vehicle must be approved before going online",
+            ));
+        }
     }
 
     // 2. Check if on trip
@@ -94,7 +115,9 @@ pub async fn set_driver_availability(
         .map_err(|e| ModuleError::InternalError(e.to_string().into()))?;
 
     if live_trip.is_some() && !payload.online {
-        return Err(ModuleError::NotAllowed("Cannot go offline while on a live trip"));
+        return Err(ModuleError::NotAllowed(
+            "Cannot go offline while on a live trip",
+        ));
     }
 
     let next_status = if payload.online {
@@ -154,14 +177,19 @@ pub async fn set_driver_availability(
     };
     let res = app_state
         .ws_registry
-        .send_to_driver(&claims.user_id, OutgoingWsMessage::Event { event: avail_evt })
+        .send_to_driver(
+            &claims.user_id,
+            OutgoingWsMessage::Event { event: avail_evt },
+        )
         .await;
 
     if let Err(e) = res {
         tracing::error!("Failed to send driver.availability.changed event: {}", e);
     };
 
-    app_state.ws_registry.set_driver_online(claims.user_id, payload.online);
+    app_state
+        .ws_registry
+        .set_driver_online(claims.user_id, payload.online);
 
     Ok(AvailabilityEnvelope {
         availability: avail_view,
@@ -221,6 +249,15 @@ pub async fn accept_ride_offer(
         .await
         .map_err(|e| ModuleError::InternalError(e.to_string().into()))?;
 
+    let active: bool = users::table
+        .filter(users::id.eq(claims.user_id))
+        .select(users::is_active)
+        .first(&mut conn)
+        .await?;
+    if !active {
+        return Err(ModuleError::PermissionDenied);
+    }
+
     let offer: RideOfferRecord = ride_offers::table
         .filter(ride_offers::id.eq(offer_id))
         .filter(ride_offers::driver_id.eq(claims.user_id))
@@ -231,7 +268,9 @@ pub async fn accept_ride_offer(
         .ok_or(ModuleError::NotFoundError("Ride offer not found".into()))?;
 
     if offer.status != "offered" {
-        return Err(ModuleError::Error("Offer already responded to or expired".into()));
+        return Err(ModuleError::Error(
+            "Offer already responded to or expired".into(),
+        ));
     }
 
     if offer.expires_at < Utc::now().naive_utc() {
@@ -246,6 +285,11 @@ pub async fn accept_ride_offer(
     let updated_ride: Option<Ride> = diesel::update(
         rides::table
             .filter(rides::id.eq(offer.ride_id))
+            .filter(diesel::dsl::exists(
+                users::table
+                    .filter(users::id.eq(claims.user_id))
+                    .filter(users::is_active.eq(true)),
+            ))
             .filter(rides::status.eq(RideStatus::Searching))
             .filter(rides::driver_id.is_null()),
     )
@@ -273,13 +317,16 @@ pub async fn accept_ride_offer(
                 .await;
 
             // Mark driver on trip
-            let _ = diesel::update(driver_availability::table.filter(driver_availability::driver_id.eq(claims.user_id)))
-                .set((
-                    driver_availability::status.eq(AvailabilityStatus::OnTrip.to_string()),
-                    driver_availability::updated_at.eq(Utc::now().naive_utc()),
-                ))
-                .execute(&mut conn)
-                .await;
+            let _ = diesel::update(
+                driver_availability::table
+                    .filter(driver_availability::driver_id.eq(claims.user_id)),
+            )
+            .set((
+                driver_availability::status.eq(AvailabilityStatus::OnTrip.to_string()),
+                driver_availability::updated_at.eq(Utc::now().naive_utc()),
+            ))
+            .execute(&mut conn)
+            .await;
 
             // Withdraw any other pending offers for this ride
             let other_offers: Vec<RideOfferRecord> = ride_offers::table
@@ -305,7 +352,12 @@ pub async fn accept_ride_offer(
                 };
                 let _ = app_state
                     .ws_registry
-                    .send_to_driver(&o.driver_id, OutgoingWsMessage::Event { event: withdrawn_evt })
+                    .send_to_driver(
+                        &o.driver_id,
+                        OutgoingWsMessage::Event {
+                            event: withdrawn_evt,
+                        },
+                    )
                     .await;
             }
 
@@ -327,7 +379,9 @@ pub async fn accept_ride_offer(
                 .set(ride_offers::status.eq("withdrawn"))
                 .execute(&mut conn)
                 .await;
-            return Err(ModuleError::Error("Ride was already assigned or cancelled".into()));
+            return Err(ModuleError::Error(
+                "Ride was already assigned or cancelled".into(),
+            ));
         }
     };
 
@@ -345,8 +399,12 @@ pub async fn accept_ride_offer(
         }),
     };
     app_state.ws_registry.broadcast_ride_event(ride.id, evt);
-    app_state.ws_registry.set_driver_active_ride(claims.user_id, Some(ride.id));
-    app_state.ws_registry.set_driver_online(claims.user_id, false);
+    app_state
+        .ws_registry
+        .set_driver_active_ride(claims.user_id, Some(ride.id));
+    app_state
+        .ws_registry
+        .set_driver_online(claims.user_id, false);
 
     Ok(proj)
 }
@@ -398,7 +456,9 @@ pub async fn driver_arrived(
         .ok_or(ModuleError::NotFoundError("Ride not found".into()))?;
 
     if !ride.status.can_transition_to(RideStatus::DriverArrived) {
-        return Err(ModuleError::NotAllowed("Cannot transition to DRIVER_ARRIVED"));
+        return Err(ModuleError::NotAllowed(
+            "Cannot transition to DRIVER_ARRIVED",
+        ));
     }
 
     let updated: Ride = diesel::update(rides::table.filter(rides::id.eq(ride_id)))
@@ -452,7 +512,9 @@ pub async fn start_ride(
         .ok_or(ModuleError::NotFoundError("Ride not found".into()))?;
 
     if !ride.status.can_transition_to(RideStatus::InProgress) {
-        return Err(ModuleError::NotAllowed("Cannot start ride in its current state"));
+        return Err(ModuleError::NotAllowed(
+            "Cannot start ride in its current state",
+        ));
     }
 
     // Verify 4-digit PIN if provided
@@ -522,7 +584,9 @@ pub async fn complete_ride(
         .ok_or(ModuleError::NotFoundError("Ride not found".into()))?;
 
     if !ride.status.can_transition_to(RideStatus::Completed) {
-        return Err(ModuleError::NotAllowed("Cannot complete ride in its current state"));
+        return Err(ModuleError::NotAllowed(
+            "Cannot complete ride in its current state",
+        ));
     }
 
     let now = Utc::now().naive_utc();
@@ -542,16 +606,22 @@ pub async fn complete_ride(
         .map_err(|e| ModuleError::InternalError(e.to_string().into()))?;
 
     // Free driver back to Online
-    let _ = diesel::update(driver_availability::table.filter(driver_availability::driver_id.eq(claims.user_id)))
-        .set((
-            driver_availability::status.eq(AvailabilityStatus::Online.to_string()),
-            driver_availability::updated_at.eq(now),
-        ))
-        .execute(&mut conn)
-        .await;
+    let _ = diesel::update(
+        driver_availability::table.filter(driver_availability::driver_id.eq(claims.user_id)),
+    )
+    .set((
+        driver_availability::status.eq(AvailabilityStatus::Online.to_string()),
+        driver_availability::updated_at.eq(now),
+    ))
+    .execute(&mut conn)
+    .await;
 
-    app_state.ws_registry.set_driver_active_ride(claims.user_id, None);
-    app_state.ws_registry.set_driver_online(claims.user_id, true);
+    app_state
+        .ws_registry
+        .set_driver_active_ride(claims.user_id, None);
+    app_state
+        .ws_registry
+        .set_driver_online(claims.user_id, true);
 
     let proj = build_ride_projection(&mut conn, &updated, claims.user_id, true).await?;
 
@@ -593,7 +663,9 @@ pub async fn driver_cancel_ride(
         .ok_or(ModuleError::NotFoundError("Ride not found".into()))?;
 
     if ride.status == RideStatus::InProgress || ride.status.is_terminal() {
-        return Err(ModuleError::NotAllowed("Cannot cancel once ride has started"));
+        return Err(ModuleError::NotAllowed(
+            "Cannot cancel once ride has started",
+        ));
     }
 
     // Driver cancelling before start resets ride to SEARCHING for re-dispatch
@@ -616,16 +688,22 @@ pub async fn driver_cancel_ride(
         .map_err(|e| ModuleError::InternalError(e.to_string().into()))?;
 
     // Set driver back online
-    let _ = diesel::update(driver_availability::table.filter(driver_availability::driver_id.eq(claims.user_id)))
-        .set((
-            driver_availability::status.eq(AvailabilityStatus::Online.to_string()),
-            driver_availability::updated_at.eq(Utc::now().naive_utc()),
-        ))
-        .execute(&mut conn)
-        .await;
+    let _ = diesel::update(
+        driver_availability::table.filter(driver_availability::driver_id.eq(claims.user_id)),
+    )
+    .set((
+        driver_availability::status.eq(AvailabilityStatus::Online.to_string()),
+        driver_availability::updated_at.eq(Utc::now().naive_utc()),
+    ))
+    .execute(&mut conn)
+    .await;
 
-    app_state.ws_registry.set_driver_active_ride(claims.user_id, None);
-    app_state.ws_registry.set_driver_online(claims.user_id, true);
+    app_state
+        .ws_registry
+        .set_driver_active_ride(claims.user_id, None);
+    app_state
+        .ws_registry
+        .set_driver_online(claims.user_id, true);
 
     // Trigger re-dispatch
     let bg_state = app_state.clone();

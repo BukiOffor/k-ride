@@ -7,6 +7,8 @@ use crate::mailer::types::MailerEvent;
 
 #[derive(Error, Debug)]
 pub enum ModuleError {
+    #[error("New ride requests are restricted")]
+    RequestsRestricted,
     #[error("{0}")]
     DieselError(#[from] diesel::result::Error),
 
@@ -98,6 +100,7 @@ impl ErrorMessage {
 impl IntoResponse for ModuleError {
     fn into_response(self) -> axum::response::Response {
         match self {
+            Self::RequestsRestricted => (axum::http::StatusCode::FORBIDDEN,axum::Json(serde_json::json!({"code":"requests_restricted","message":"New ride requests are restricted"}))).into_response(),
             Self::WrongCredentials | Self::InvalidToken | Self::AuthError => {
                 let message = ErrorMessage::default().build(self.to_string(), 401);
                 (axum::http::StatusCode::UNAUTHORIZED, axum::Json(message)).into_response()

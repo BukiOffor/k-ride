@@ -23,13 +23,13 @@
 
 use crate::AppState;
 use axum::{
+    Router,
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
         Path, Query, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
     },
     response::IntoResponse,
     routing::get,
-    Router,
 };
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
@@ -72,7 +72,9 @@ pub enum IncomingWsFrame {
     #[serde(rename = "unsubscribe")]
     Unsubscribe { channel: String },
     #[serde(rename = "location")]
-    Location { location: crate::vrp::dtos::rides::LiveLocation },
+    Location {
+        location: crate::vrp::dtos::rides::LiveLocation,
+    },
     #[serde(rename = "ping")]
     Ping,
 }
@@ -80,6 +82,7 @@ pub enum IncomingWsFrame {
 /// In-memory DashMap registry for live driver network sockets and ride broadcast channels.
 #[derive(Clone, Default)]
 pub struct WsRegistry {
+    pub admin_channels: Arc<DashMap<String, broadcast::Sender<WsEventFrame>>>,
     /// Driver ID -> Internal Message Mailbox (Outgoing Speaker sender)
     pub drivers: Arc<DashMap<Uuid, mpsc::Sender<OutgoingWsMessage>>>,
     /// Ride ID -> Broadcast Channel for active ride updates
@@ -95,6 +98,7 @@ pub struct WsRegistry {
 impl WsRegistry {
     pub fn new() -> Self {
         Self {
+            admin_channels: Arc::new(DashMap::new()),
             drivers: Arc::new(DashMap::new()),
             ride_channels: Arc::new(DashMap::new()),
             driver_online: Arc::new(DashMap::new()),
@@ -106,13 +110,15 @@ impl WsRegistry {
     /// Phase 1: Registers a driver's outgoing mailbox upon WebSocket handshake.
     pub fn register_driver(&self, driver_id: Uuid, tx: mpsc::Sender<OutgoingWsMessage>) {
         self.drivers.insert(driver_id, tx);
-        self.driver_last_seen.insert(driver_id, std::time::Instant::now());
+        self.driver_last_seen
+            .insert(driver_id, std::time::Instant::now());
         tracing::info!("Registered driver in DashMap mailbox: {}", driver_id);
     }
 
     /// Refreshes the last-seen activity timestamp for a driver.
     pub fn touch_driver(&self, driver_id: &Uuid) {
-        self.driver_last_seen.insert(*driver_id, std::time::Instant::now());
+        self.driver_last_seen
+            .insert(*driver_id, std::time::Instant::now());
     }
 
     /// Sets driver online availability in memory.
@@ -126,7 +132,10 @@ impl WsRegistry {
 
     /// Checks if driver is marked online in memory.
     pub fn is_driver_online(&self, driver_id: &Uuid) -> bool {
-        self.driver_online.get(driver_id).map(|v| *v).unwrap_or(false)
+        self.driver_online
+            .get(driver_id)
+            .map(|v| *v)
+            .unwrap_or(false)
     }
 
     /// Sets or clears the active ride for a driver in memory.
@@ -206,7 +215,8 @@ impl WsRegistry {
         }
 
         // 2. Clean up abandoned ride broadcast channels with 0 active subscribers
-        self.ride_channels.retain(|_ride_id, bcast| bcast.receiver_count() > 0);
+        self.ride_channels
+            .retain(|_ride_id, bcast| bcast.receiver_count() > 0);
     }
 
     /// Checks if a driver currently has an active WebSocket connection in RAM.
@@ -231,8 +241,43 @@ impl WsRegistry {
         }
     }
 
+    pub fn admin_channel(&self, channel: &str) -> broadcast::Sender<WsEventFrame> {
+        self.admin_channels
+            .entry(channel.to_owned())
+            .or_insert_with(|| broadcast::channel(256).0)
+            .clone()
+    }
+
+    pub fn broadcast_admin_event(
+        &self,
+        channel: &str,
+        event_type: &str,
+        payload: serde_json::Value,
+    ) {
+        let mut payload = if payload.is_object() {
+            payload
+        } else {
+            serde_json::json!({"data":payload})
+        };
+        payload["type"] = serde_json::json!(event_type);
+        let event = WsEventFrame {
+            id: format!("evt_{}", Uuid::now_v7()),
+            ride_id: None,
+            seq: 0,
+            ride_version: None,
+            occurred_at: chrono::Utc::now().to_rfc3339(),
+            payload,
+        };
+        let _ = self.admin_channel(channel).send(event);
+    }
+
     /// Pushes a ride update event to all subscribers of `ride:<ride_id>`.
     pub fn broadcast_ride_event(&self, ride_id: Uuid, event: WsEventFrame) {
+        if event.payload.get("type").and_then(|v| v.as_str())
+            != Some("ride.driver.location_updated")
+        {
+            self.broadcast_admin_event("admin:rides", "admin.ride.changed", serde_json::json!({"rideId":ride_id,"status":event.payload.get("ride").and_then(|r| r.get("status")),"sos":event.payload.get("ride").and_then(|r| r.get("sos")),"rideVersion":event.ride_version}));
+        }
         if let Some(bcast) = self.ride_channels.get(&ride_id) {
             let _ = bcast.send(event);
         }
@@ -266,35 +311,82 @@ pub fn routes(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-/// WebSocket Upgrade Handler with no authorization.
-/// Driver ID can be provided via query parameter `?driver_id=...`.
+/// Authenticate browser cookies or Bearer tokens; identity hints may never override claims.
 pub async fn ws_handler(
     State(state): State<Arc<AppState>>,
+    claims: crate::auth::jwt::Claims,
     Query(query): Query<WsQuery>,
     ws: WebSocketUpgrade,
-) -> impl IntoResponse {
-    let (user_id, is_driver) = if let Some(driver_id) = query.driver_id {
-        (driver_id, true)
-    } else if let Some(user_id) = query.user_id {
-        (user_id, false)
-    } else {
-        (Uuid::now_v7(), false)
-    };
-    ws.on_upgrade(move |socket| handle_socket(state, user_id, is_driver, socket))
+) -> Result<axum::response::Response, crate::ModuleError> {
+    if query.driver_id.is_some_and(|id| id != claims.user_id)
+        || query.user_id.is_some_and(|id| id != claims.user_id)
+    {
+        return Err(crate::ModuleError::PermissionDenied);
+    }
+    let is_driver = matches!(claims.role, crate::users::RoleType::Driver);
+    if query.driver_id.is_some() && !is_driver {
+        return Err(crate::ModuleError::PermissionDenied);
+    }
+    let is_admin = matches!(
+        claims.role,
+        crate::users::RoleType::Admin | crate::users::RoleType::Root
+    );
+    Ok(ws
+        .on_upgrade(move |socket| handle_socket(state, claims.user_id, is_driver, is_admin, socket))
+        .into_response())
 }
 
-/// WebSocket Upgrade Handler with driver ID directly in path: GET /rides/ws/{driver_id}
 pub async fn ws_handler_with_path(
     State(state): State<Arc<AppState>>,
+    claims: crate::auth::jwt::Claims,
     Path(driver_id): Path<Uuid>,
     ws: WebSocketUpgrade,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(state, driver_id, true, socket))
+) -> Result<axum::response::Response, crate::ModuleError> {
+    if driver_id != claims.user_id || !matches!(claims.role, crate::users::RoleType::Driver) {
+        return Err(crate::ModuleError::PermissionDenied);
+    }
+    Ok(ws
+        .on_upgrade(move |socket| handle_socket(state, claims.user_id, true, false, socket))
+        .into_response())
+}
+
+async fn may_subscribe(state: &AppState, user_id: Uuid, ride_id: Uuid, is_admin: bool) -> bool {
+    if is_admin {
+        return true;
+    }
+    use crate::schema::rides::dsl::*;
+    use diesel::prelude::*;
+    use diesel_async::RunQueryDsl;
+    let Ok(mut db) = state.pool.get().await else {
+        return false;
+    };
+    rides
+        .filter(id.eq(ride_id))
+        .filter(passenger_id.eq(user_id).or(driver_id.eq(user_id)))
+        .select((driver_id, status))
+        .first::<(Option<Uuid>, String)>(&mut db)
+        .await
+        .map(|(assigned, ride_status)| {
+            if assigned == Some(user_id)
+                && !matches!(ride_status.as_str(), "COMPLETED" | "CANCELLED")
+            {
+                state
+                    .ws_registry
+                    .set_driver_active_ride(user_id, Some(ride_id));
+            }
+            true
+        })
+        .unwrap_or(false)
 }
 
 /// Handles the upgraded WebSocket connection across the 4 phases.
-async fn handle_socket(state: Arc<AppState>, user_id: Uuid, is_driver: bool, socket: WebSocket) {
-
+async fn handle_socket(
+    state: Arc<AppState>,
+    user_id: Uuid,
+    is_driver: bool,
+    is_admin: bool,
+    socket: WebSocket,
+) {
     // Phase 1: Splitting the line into Incoming Listener and Outgoing Speaker
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
@@ -303,7 +395,9 @@ async fn handle_socket(state: Arc<AppState>, user_id: Uuid, is_driver: bool, soc
 
     // If user is a driver, register their mailbox in DashMap
     if is_driver {
-        state.ws_registry.register_driver(user_id, outgoing_tx.clone());
+        state
+            .ws_registry
+            .register_driver(user_id, outgoing_tx.clone());
     }
 
     // Task: Outgoing Speaker (sends messages down to the client's WebSocket & periodic keepalive pings)
@@ -338,6 +432,8 @@ async fn handle_socket(state: Arc<AppState>, user_id: Uuid, is_driver: bool, soc
     let mut ride_subscriptions: std::collections::HashMap<Uuid, tokio::task::JoinHandle<()>> =
         std::collections::HashMap::new();
 
+    let mut admin_subscriptions: std::collections::HashMap<String, tokio::task::JoinHandle<()>> =
+        std::collections::HashMap::new();
     const INCOMING_HEARTBEAT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 
     loop {
@@ -366,11 +462,16 @@ async fn handle_socket(state: Arc<AppState>, user_id: Uuid, is_driver: bool, soc
                                                 available_seats: 4,
                                             };
 
-                                            let _ = dispatcher.ingest_driver_location(&driver_state).await;
+                                            let _ = dispatcher
+                                                .ingest_driver_location(&driver_state)
+                                                .await;
                                         }
 
                                         // Broadcast location update if driver has an active ride in RAM
-                                        if let Some(ride_id) = app_state_clone.ws_registry.get_driver_active_ride(&user_id) {
+                                        if let Some(ride_id) = app_state_clone
+                                            .ws_registry
+                                            .get_driver_active_ride(&user_id)
+                                        {
                                             let loc_event = WsEventFrame {
                                                 id: format!("evt_{}", Uuid::now_v7()),
                                                 ride_id: Some(ride_id),
@@ -390,10 +491,74 @@ async fn handle_socket(state: Arc<AppState>, user_id: Uuid, is_driver: bool, soc
                                 }
                                 IncomingWsFrame::Subscribe { channel } => {
                                     tracing::debug!("User {} subscribed to {}", user_id, channel);
+                                    if is_admin
+                                        && matches!(
+                                            channel.as_str(),
+                                            "admin:rides" | "admin:safety"
+                                        )
+                                        && !admin_subscriptions.contains_key(&channel)
+                                    {
+                                        let mut rx = app_state_clone
+                                            .ws_registry
+                                            .admin_channel(&channel)
+                                            .subscribe();
+                                        let tx = outgoing_tx.clone();
+                                        admin_subscriptions.insert(
+                                            channel.clone(),
+                                            tokio::spawn(async move {
+                                                loop {
+                                                    match rx.recv().await {
+                                                        Ok(event) => {
+                                                            if tx
+                                                                .send(OutgoingWsMessage::Event {
+                                                                    event,
+                                                                })
+                                                                .await
+                                                                .is_err()
+                                                            {
+                                                                break;
+                                                            }
+                                                        }
+                                                        Err(
+                                                            broadcast::error::RecvError::Lagged(_),
+                                                        ) => {
+                                                            // A client must refetch after a gap; never silently lose a safety update.
+                                                            let event = WsEventFrame {
+                                                                id: format!("evt_{}",Uuid::now_v7()),
+                                                                ride_id: None,
+                                                                seq: 0,
+                                                                ride_version: None,
+                                                                occurred_at: chrono::Utc::now()
+                                                                    .to_rfc3339(),
+                                                                payload: serde_json::json!({"type":"admin.resync_required"}),
+                                                            };
+                                                            if tx
+                                                                .send(OutgoingWsMessage::Event {
+                                                                    event,
+                                                                })
+                                                                .await
+                                                                .is_err()
+                                                            {
+                                                                break;
+                                                            }
+                                                        }
+                                                        Err(_) => break,
+                                                    }
+                                                }
+                                            }),
+                                        );
+                                    }
                                     if channel.starts_with("ride:") {
                                         if let Ok(ride_id) = Uuid::parse_str(&channel[5..]) {
-                                            if is_driver {
-                                                app_state_clone.ws_registry.set_driver_active_ride(user_id, Some(ride_id));
+                                            if !may_subscribe(
+                                                &app_state_clone,
+                                                user_id,
+                                                ride_id,
+                                                is_admin,
+                                            )
+                                            .await
+                                            {
+                                                continue;
                                             }
                                             if !ride_subscriptions.contains_key(&ride_id) {
                                                 let mut rx = app_state_clone
@@ -404,7 +569,9 @@ async fn handle_socket(state: Arc<AppState>, user_id: Uuid, is_driver: bool, soc
                                                 let sub_handle = tokio::spawn(async move {
                                                     while let Ok(event) = rx.recv().await {
                                                         if tx
-                                                            .send(OutgoingWsMessage::Event { event })
+                                                            .send(OutgoingWsMessage::Event {
+                                                                event,
+                                                            })
                                                             .await
                                                             .is_err()
                                                         {
@@ -418,13 +585,19 @@ async fn handle_socket(state: Arc<AppState>, user_id: Uuid, is_driver: bool, soc
                                     }
                                 }
                                 IncomingWsFrame::Unsubscribe { channel } => {
-                                    tracing::debug!("User {} unsubscribed from {}", user_id, channel);
+                                    tracing::debug!(
+                                        "User {} unsubscribed from {}",
+                                        user_id,
+                                        channel
+                                    );
+                                    if let Some(handle) = admin_subscriptions.remove(&channel) {
+                                        handle.abort();
+                                    }
                                     if channel.starts_with("ride:") {
                                         if let Ok(ride_id) = Uuid::parse_str(&channel[5..]) {
-                                            if is_driver && app_state_clone.ws_registry.get_driver_active_ride(&user_id) == Some(ride_id) {
-                                                app_state_clone.ws_registry.set_driver_active_ride(user_id, None);
-                                            }
-                                            if let Some(handle) = ride_subscriptions.remove(&ride_id) {
+                                            if let Some(handle) =
+                                                ride_subscriptions.remove(&ride_id)
+                                            {
                                                 handle.abort();
                                             }
                                         }
@@ -459,6 +632,9 @@ async fn handle_socket(state: Arc<AppState>, user_id: Uuid, is_driver: bool, soc
         }
     }
 
+    for (_, handle) in admin_subscriptions {
+        handle.abort();
+    }
     for (_, handle) in ride_subscriptions {
         handle.abort();
     }
@@ -470,4 +646,31 @@ async fn handle_socket(state: Arc<AppState>, user_id: Uuid, is_driver: bool, soc
     }
 
     send_task.abort();
+}
+
+#[cfg(test)]
+mod admin_tests {
+    use super::*;
+    #[test]
+    fn admin_events_use_unique_ids_and_compact_payloads() {
+        let registry = WsRegistry::new();
+        let mut network = registry.admin_channel("admin:rides").subscribe();
+        let ride_id = Uuid::now_v7();
+        let frame = |kind: &str| WsEventFrame {
+            id: "source".into(),
+            ride_id: Some(ride_id),
+            seq: 1,
+            ride_version: Some(2),
+            occurred_at: "now".into(),
+            payload: serde_json::json!({"type":kind,"ride":{"status":"IN_PROGRESS","passenger":{"phone":"private"}}}),
+        };
+        registry.broadcast_ride_event(ride_id, frame("ride.driver.location_updated"));
+        assert!(network.try_recv().is_err());
+        registry.broadcast_ride_event(ride_id, frame("ride.updated"));
+        let first = network.try_recv().unwrap();
+        assert_eq!(first.payload["type"], "admin.ride.changed");
+        assert!(!first.payload.to_string().contains("private"));
+        registry.broadcast_ride_event(ride_id, frame("ride.updated"));
+        assert_ne!(first.id, network.try_recv().unwrap().id);
+    }
 }

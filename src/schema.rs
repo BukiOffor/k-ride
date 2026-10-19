@@ -148,6 +148,9 @@ diesel::table! {
         #[max_length = 100]
         city -> Varchar,
         car -> Nullable<Uuid>,
+        #[max_length = 10]
+        account_number -> Nullable<Varchar>,
+        bank_name -> Nullable<Varchar>,
     }
 }
 
