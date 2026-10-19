@@ -14,15 +14,22 @@ pub fn routes(state: Arc<AppState>) -> Router {
 pub fn module_routes(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/me", get(get_viewer))
-        .route("/me/driver-review", get(crate::admin::own_review))
-        .route("/me/notifications", get(crate::admin::notifications))
+        .route(
+            "/me/driver-review",
+            get(crate::admin::handlers::applications::own_review),
+        )
+        .route(
+            "/me/notifications",
+            get(crate::admin::handlers::account::notifications),
+        )
         .route(
             "/me/trusted-contacts",
-            get(crate::admin::contacts).post(crate::admin::add_contact),
+            get(crate::admin::handlers::account::contacts)
+                .post(crate::admin::handlers::account::add_contact),
         )
         .route(
             "/me/trusted-contacts/{id}",
-            axum::routing::delete(crate::admin::remove_contact),
+            axum::routing::delete(crate::admin::handlers::account::remove_contact),
         )
         .route("/estimate", post(estimate_fare))
         .route("/request", post(request_ride))

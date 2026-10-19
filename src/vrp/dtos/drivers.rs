@@ -58,7 +58,9 @@ impl<'de> Deserialize<'de> for PassengerSeats {
             type Value = PassengerSeats;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("an integer (e.g. 3, 4, 5, 6) or string representation ('3', '4', '5', '6+')")
+                formatter.write_str(
+                    "an integer (e.g. 3, 4, 5, 6) or string representation ('3', '4', '5', '6+')",
+                )
             }
 
             fn visit_i64<E>(self, v: i64) -> Result<PassengerSeats, E>
@@ -124,7 +126,11 @@ pub struct DriverRegistrationDto {
     pub licence_class: LicenceClass,
     #[serde(alias = "license_expiry_date")]
     pub licence_expiry_date: NaiveDate,
-    #[serde(alias = "license_photo", alias = "licence_scan", alias = "license_scan")]
+    #[serde(
+        alias = "license_photo",
+        alias = "licence_scan",
+        alias = "license_scan"
+    )]
     pub licence_photo: String,
 
     // Step 3: Vehicle
@@ -138,7 +144,11 @@ pub struct DriverRegistrationDto {
     pub vehicle_year: i32,
     #[serde(alias = "plate_number", alias = "license_plate")]
     pub vehicle_plate_number: String,
-    #[serde(alias = "seats", alias = "capacity", alias = "number_of_passenger_seats")]
+    #[serde(
+        alias = "seats",
+        alias = "capacity",
+        alias = "number_of_passenger_seats"
+    )]
     pub passenger_seats: PassengerSeats,
     #[serde(alias = "car_photo")]
     pub vehicle_photo: Option<String>,
@@ -215,7 +225,9 @@ impl DriverRegistrationDto {
         }
 
         if self.licence_photo.trim().is_empty() {
-            return Err(ApiError::BadRequest("Driver's licence photo or scan is required"));
+            return Err(ApiError::BadRequest(
+                "Driver's licence photo or scan is required",
+            ));
         }
 
         // Step 3: Vehicle validation

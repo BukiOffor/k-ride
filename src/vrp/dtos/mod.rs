@@ -1,6 +1,6 @@
 pub mod cars;
-pub mod rides;
 pub mod drivers;
+pub mod rides;
 
 pub use cars::*;
 pub use drivers::*;

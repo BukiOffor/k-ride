@@ -171,3 +171,12 @@ The integration test rolls back its fixtures. It covers legacy statuses, documen
 approval blocking/replacement invalidation, vehicle verification, incident creation,
 phone release, resolution notifications, reports, paging and ride restrictions.
 `tests/validate_admin_sql.py` only prepares statements; it does not modify data.
+
+## Source organization
+
+`src/admin/mod.rs` declares the module. The resource files in `handlers/` register
+and adapt HTTP requests; matching files in `services/` implement business rules,
+database queries and transactions. `dto.rs` defines request/response contracts,
+`model.rs` defines database result models, `errors.rs` maps failures, and `swagger.rs`
+registers OpenAPI paths. Shared authorization, pagination and audit helpers live in
+`services/mod.rs`. The integration and unit checks live in `tests.rs`.

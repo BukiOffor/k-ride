@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 statements = []
-for path in Path("src/admin").glob("*.rs"):
+for path in Path("src/admin/services").rglob("*.rs"):
     for match in re.finditer(r'"((?:[^"\\]|\\.)*)"', path.read_text()):
         source = match.group(1)
         if not source.lstrip().startswith(("SELECT ", "WITH ", "UPDATE ", "INSERT ", "DELETE ")):

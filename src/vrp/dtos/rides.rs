@@ -649,7 +649,8 @@ impl UpsertRideOptionDto {
         if self.name.trim().is_empty() {
             return Err("name is required".into());
         }
-        let all_classes = std::iter::once(&self.vehicle_class).chain(&self.eligible_vehicle_classes);
+        let all_classes =
+            std::iter::once(&self.vehicle_class).chain(&self.eligible_vehicle_classes);
         for c in all_classes {
             if !VEHICLE_CLASSES.contains(&c.as_str()) {
                 return Err(format!(
@@ -718,7 +719,10 @@ mod tests {
     #[test]
     fn money_serialises_in_minor_units_camel_case() {
         let json = serde_json::to_value(Money::new(190000, "NGN")).unwrap();
-        assert_eq!(json, serde_json::json!({"amountMinor": 190000, "currency": "NGN"}));
+        assert_eq!(
+            json,
+            serde_json::json!({"amountMinor": 190000, "currency": "NGN"})
+        );
     }
 
     #[test]
@@ -733,8 +737,26 @@ mod tests {
 
     #[test]
     fn latlng_validation() {
-        assert!(LatLng { lat: 9.06, lng: 7.47 }.is_valid());
-        assert!(!LatLng { lat: 91.0, lng: 7.47 }.is_valid());
-        assert!(!LatLng { lat: f64::NAN, lng: 0.0 }.is_valid());
+        assert!(
+            LatLng {
+                lat: 9.06,
+                lng: 7.47
+            }
+            .is_valid()
+        );
+        assert!(
+            !LatLng {
+                lat: 91.0,
+                lng: 7.47
+            }
+            .is_valid()
+        );
+        assert!(
+            !LatLng {
+                lat: f64::NAN,
+                lng: 0.0
+            }
+            .is_valid()
+        );
     }
 }

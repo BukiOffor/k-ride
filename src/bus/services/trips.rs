@@ -38,9 +38,9 @@ pub async fn create_trip(
     }
 
     if payload.ride_type == RideType::RoundTrip {
-        let ret_time = payload.return_time.ok_or_else(|| {
-            ApiError::Error("Return time is required for round trips".into())
-        })?;
+        let ret_time = payload
+            .return_time
+            .ok_or_else(|| ApiError::Error("Return time is required for round trips".into()))?;
 
         if ret_time <= payload.arrival_time {
             return Err(ApiError::Error(
@@ -95,7 +95,7 @@ pub async fn create_trip(
         tracing::warn!("Failed to queue activity log: {}", e);
     }
 
-    // if trip is of round trip, add a return trip 
+    // if trip is of round trip, add a return trip
     if payload.ride_type == RideType::RoundTrip {
         let return_departure = payload.return_time.unwrap();
         let trip_duration = payload.arrival_time - payload.departure_time;

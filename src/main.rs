@@ -104,7 +104,7 @@ async fn main() {
     let app = k_rides::users::handlers::routes(state.clone())
         .merge(k_rides::bus::handlers::routes(state.clone()))
         .merge(k_rides::vrp::handlers::routes(state.clone()))
-        .nest("/admin", k_rides::admin::routes(state.clone()))
+        .merge(k_rides::admin::handlers::routes(state.clone()))
         .merge(k_rides::auth::handlers::routes(state.clone()))
         .merge(k_rides::logs::handlers::routes(state.clone()))
         .layer(CompressionLayer::new())
@@ -116,7 +116,7 @@ async fn main() {
     openapi.merge(VrpApiDoc::openapi());
     openapi.merge(AuthApiDoc::openapi());
     openapi.merge(LogsApiDoc::openapi());
-    openapi.merge(k_rides::admin::AdminApiDoc::openapi());
+    openapi.merge(k_rides::admin::swagger::AdminApiDoc::openapi());
 
     let ws_routes =
         axum::Router::new().nest("/rides", k_rides::vrp::realtime::routes(state.clone()));

@@ -1,13 +1,7 @@
+//! Business logic and database operations for reports.
 use super::*;
-fn days(period: Option<&str>) -> Result<i32, AdminError> {
-    match period.unwrap_or("week") {
-        "week" => Ok(7),
-        "month" => Ok(30),
-        "quarter" => Ok(90),
-        _ => Err(bad("period must be week, month, or quarter")),
-    }
-}
-pub(super) const REPORT_SQL: &str = r#"
+
+pub(crate) const REPORT_SQL: &str = r#"
 WITH periods AS (SELECT 0 AS n,now() AT TIME ZONE 'UTC' AS stop UNION ALL SELECT 1,now() AT TIME ZONE 'UTC'-make_interval(days=>($1->>'days')::int)),
 ride_stats AS (
  SELECT p.n,count(r.id)::float8 AS requested,count(r.id) FILTER(WHERE r.status='COMPLETED')::float8 AS completed,
@@ -44,7 +38,8 @@ ride_stats AS (
 )
 SELECT COALESCE(jsonb_agg(jsonb_build_object('id',section,'metrics',metrics) ORDER BY section),'[]'::jsonb) AS data FROM sections WHERE $2 IS NOT NULL
 "#;
-pub(super) const SERIES_SQL: &str = r#"
+
+pub(crate) const SERIES_SQL: &str = r#"
 WITH days AS (SELECT generate_series((CURRENT_DATE-($1->>'days')::int+1)::timestamp,CURRENT_DATE::timestamp,'1 day') AS day),
 r AS (SELECT created_at::date AS day,count(*) AS requested,count(*) FILTER(WHERE status='COMPLETED') AS completed,count(*) FILTER(WHERE assigned_at IS NOT NULL) AS matched FROM rides WHERE created_at>=CURRENT_DATE-($1->>'days')::int+1 GROUP BY 1),
 v AS (SELECT updated_at::date AS day,avg(extract(epoch FROM updated_at-created_at)/86400.0) AS days FROM driver_profiles WHERE status='APPROVED' AND updated_at>=CURRENT_DATE-($1->>'days')::int+1 GROUP BY 1),
@@ -53,7 +48,23 @@ rt AS (SELECT created_at::date AS day,avg(stars) AS rating FROM ride_ratings WHE
 series AS (SELECT x.section,jsonb_agg(jsonb_build_object('label',to_char(d.day,'YYYY-MM-DD'),'value',x.value,'secondary',x.secondary) ORDER BY d.day) AS points FROM days d LEFT JOIN r ON r.day=d.day::date LEFT JOIN v ON v.day=d.day::date LEFT JOIN s ON s.day=d.day::date LEFT JOIN rt ON rt.day=d.day::date CROSS JOIN LATERAL (VALUES ('adoption',COALESCE(r.requested,0)::numeric,COALESCE(r.completed,0)::numeric),('verification',v.days,NULL),('performance',100.0*r.matched/NULLIF(r.requested,0),NULL),('safety',COALESCE(s.incidents,0)::numeric,NULL),('ratings',rt.rating,NULL)) x(section,value,secondary) GROUP BY x.section)
 SELECT COALESCE(jsonb_object_agg(section,points),'{}'::jsonb) AS data FROM series WHERE $2 IS NOT NULL
 "#;
-async fn report_data(db: &mut Connection<'_>, d: i32, actor: Uuid) -> Result<Value, AdminError> {
+
+/// Validate the report period and convert it to a 7, 30 or 90 day window.
+pub(crate) fn days(period: Option<&str>) -> Result<i32, AdminError> {
+    match period.unwrap_or("week") {
+        "week" => Ok(7),
+        "month" => Ok(30),
+        "quarter" => Ok(90),
+        _ => Err(bad("period must be week, month, or quarter")),
+    }
+}
+
+/// Combine period metrics and daily chart series into report sections.
+pub(crate) async fn report_data(
+    db: &mut Connection<'_>,
+    d: i32,
+    actor: Uuid,
+) -> Result<Value, AdminError> {
     let mut sections = query(db, REPORT_SQL, json!({"days":d}), actor).await?;
     let series = query(db, SERIES_SQL, json!({"days":d}), actor).await?;
     if let Some(sections) = sections.as_array_mut() {
@@ -67,23 +78,16 @@ async fn report_data(db: &mut Connection<'_>, d: i32, actor: Uuid) -> Result<Val
     Ok(sections)
 }
 
-#[utoipa::path(get,path="/admin/reports",tag="Paid Rides Admin",security(("bearerAuth"=[]),("cookieAuth"=[])),responses((status=200,description="Success",body=Vec<dto::ReportSection>),(status=400,description="Invalid request"),(status=403,description="Admin or Root required"),(status=404,description="Not found"),(status=409,description="Workflow conflict")),params(("period"=Option<String>,Query)))]
-pub(super) async fn reports(
-    State(s): State<Arc<AppState>>,
-    c: Claims,
-    Query(f): Query<Filters>,
-) -> Result<Json<Value>, AdminError> {
+/// Calculate report metrics, previous-period deltas and daily series.
+pub async fn reports(s: Arc<AppState>, c: Claims, f: Filters) -> Result<Value, AdminError> {
     require_admin(&c)?;
     let d = days(f.period.as_deref())?;
     let mut db = connection(&s).await?;
-    Ok(Json(report_data(&mut db, d, c.user_id).await?))
+    Ok(report_data(&mut db, d, c.user_id).await?)
 }
-#[utoipa::path(get,path="/admin/overview",tag="Paid Rides Admin",security(("bearerAuth"=[]),("cookieAuth"=[])),responses((status=200,description="Success",body=dto::Overview),(status=400,description="Invalid request"),(status=403,description="Admin or Root required"),(status=404,description="Not found"),(status=409,description="Workflow conflict")),params(("period"=Option<String>,Query)))]
-pub(super) async fn overview(
-    State(s): State<Arc<AppState>>,
-    c: Claims,
-    Query(f): Query<Filters>,
-) -> Result<Json<Value>, AdminError> {
+
+/// Build current operational counts, period performance metrics and the latest active SOS.
+pub async fn overview(s: Arc<AppState>, c: Claims, f: Filters) -> Result<Value, AdminError> {
     require_admin(&c)?;
     let d = days(f.period.as_deref())?;
     let mut db = connection(&s).await?;
@@ -113,14 +117,11 @@ pub(super) async fn overview(
         }
     }
     v["secondary"] = json!(metrics);
-    Ok(Json(v))
+    Ok(v)
 }
-#[utoipa::path(get,path="/admin/reports/export",tag="Paid Rides Admin",security(("bearerAuth"=[]),("cookieAuth"=[])),responses((status=200,description="CSV download",body=String,content_type="text/csv"),(status=400,description="Invalid request"),(status=403,description="Admin or Root required"),(status=404,description="Not found"),(status=409,description="Workflow conflict")),params(("period"=Option<String>,Query)))]
-pub(super) async fn export(
-    State(s): State<Arc<AppState>>,
-    c: Claims,
-    Query(f): Query<Filters>,
-) -> Result<Response, AdminError> {
+
+/// Generate a CSV report and audit the export before returning its contents.
+pub async fn export(s: Arc<AppState>, c: Claims, f: Filters) -> Result<String, AdminError> {
     require_admin(&c)?;
     let d = days(f.period.as_deref())?;
     let mut db = connection(&s).await?;
@@ -151,15 +152,5 @@ pub(super) async fn export(
         json!({"days":d}),
     )
     .await?;
-    Ok((
-        [
-            (axum::http::header::CONTENT_TYPE, "text/csv; charset=utf-8"),
-            (
-                axum::http::header::CONTENT_DISPOSITION,
-                "attachment; filename=paid-rides-report.csv",
-            ),
-        ],
-        csv,
-    )
-        .into_response())
+    Ok(csv)
 }

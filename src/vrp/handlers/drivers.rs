@@ -13,7 +13,10 @@ pub fn routes(state: Arc<AppState>) -> Router {
 
 pub fn module_routes(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/availability", get(get_driver_availability).put(set_driver_availability))
+        .route(
+            "/availability",
+            get(get_driver_availability).put(set_driver_availability),
+        )
         .route("/rides/current", get(get_driver_current_ride))
         .route("/rides/history", get(get_driver_history))
         .route("/offers/{offer_id}/accept", post(accept_offer))
@@ -23,10 +26,12 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
         .route("/rides/{ride_id}/complete", post(driver_complete_ride))
         .route("/rides/{ride_id}/cancel", post(driver_cancel_ride))
         .route("/location", post(update_driver_location))
-        .layer(tower::ServiceBuilder::new().layer(middleware::from_fn_with_state(
-            state.clone(),
-            crate::auth::middleware::authorize,
-        )))
+        .layer(
+            tower::ServiceBuilder::new().layer(middleware::from_fn_with_state(
+                state.clone(),
+                crate::auth::middleware::authorize,
+            )),
+        )
         .with_state(state)
 }
 

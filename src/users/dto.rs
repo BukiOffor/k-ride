@@ -22,7 +22,6 @@ pub struct CreateUserDto {
     pub role: Option<RoleType>,
     #[serde(alias = "driver_profile", alias = "driver")]
     pub driver_details: Option<DriverRegistrationDto>,
-
 }
 
 impl TryFrom<CreateUserDto> for User {
@@ -33,7 +32,10 @@ impl TryFrom<CreateUserDto> for User {
             .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
         let is_driver = dto.role == Some(RoleType::Driver) || dto.driver_details.is_some();
         let (role, identity_type, identity_number) = if is_driver {
-            let nin = dto.driver_details.as_ref().map(|d| d.nin.trim().to_string());
+            let nin = dto
+                .driver_details
+                .as_ref()
+                .map(|d| d.nin.trim().to_string());
             (RoleType::Driver, Some("NIN".to_string()), nin)
         } else {
             (dto.role.unwrap_or(RoleType::User), None, None)
@@ -285,4 +287,3 @@ mod tests {
         assert_eq!(user.identity_number, Some("12345678901".to_string()));
     }
 }
-

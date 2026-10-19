@@ -182,7 +182,7 @@ pub async fn request_ride(
         .await
         .map_err(|e| ModuleError::InternalError(e.to_string().into()))?;
 
-    if crate::admin::requests_restricted(&mut conn, claims.user_id).await? {
+    if crate::admin::services::people::requests_restricted(&mut conn, claims.user_id).await? {
         return Err(ModuleError::RequestsRestricted);
     }
 

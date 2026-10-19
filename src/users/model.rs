@@ -35,8 +35,7 @@ pub struct User {
     pub city: String,
     pub car: Option<Uuid>,
     pub account_number: Option<String>,
-    pub bank_name: Option<String>
-    
+    pub bank_name: Option<String>,
 }
 
 #[derive(
@@ -71,12 +70,8 @@ impl FromSql<Text, diesel::pg::Pg> for RoleType {
     fn from_sql(bytes: diesel::pg::PgValue<'_>) -> deserialize::Result<Self> {
         match std::str::from_utf8(bytes.as_bytes())? {
             "Admin" | "admin" => Ok(RoleType::Admin),
-            "RouteCoordinator"
-            | "route_coordinator"
-            | "Route Coordinator"
-            | "routeCoordinator"
-            | "Coordinator"
-            | "coordinator" => Ok(RoleType::RouteCoordinator),
+            "RouteCoordinator" | "route_coordinator" | "Route Coordinator" | "routeCoordinator"
+            | "Coordinator" | "coordinator" => Ok(RoleType::RouteCoordinator),
             "Driver" | "driver" => Ok(RoleType::Driver),
             "Root" | "root" => Ok(RoleType::Root),
             "User" | "user" => Ok(RoleType::User),

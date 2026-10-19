@@ -12,7 +12,7 @@ pub struct CreateBookingDto {
     pub pickup_point: Option<Uuid>,
     pub dropoff_point: Option<Uuid>,
     pub num_of_kids: i32,
-    pub return_trip: bool
+    pub return_trip: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

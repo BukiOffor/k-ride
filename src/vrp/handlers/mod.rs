@@ -1,7 +1,6 @@
 pub mod cars;
-pub mod rides;
 pub mod drivers;
-
+pub mod rides;
 
 pub fn routes(state: Arc<AppState>) -> Router {
     Router::new()

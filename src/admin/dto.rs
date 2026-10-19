@@ -1,6 +1,6 @@
 //! Public schemas for the admin API; persisted projections use these JSON names.
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -165,4 +165,118 @@ pub struct ReportSection {
     pub id: String,
     pub metrics: Vec<Metric>,
     pub series: Option<Vec<Value>>,
+}
+
+use super::errors::{AdminError, bad};
+use super::services::member;
+
+#[derive(Default, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Filters {
+    pub cursor: Option<Uuid>,
+    pub limit: Option<i64>,
+    pub q: Option<String>,
+    pub state: Option<String>,
+    pub status: Option<String>,
+    pub severity: Option<String>,
+    pub category: Option<String>,
+    pub track: Option<String>,
+    pub availability: Option<String>,
+    pub verification: Option<String>,
+    pub flagged: Option<bool>,
+    pub active: Option<bool>,
+    pub membership: Option<String>,
+    pub has_trusted_contact: Option<bool>,
+    pub sos: Option<bool>,
+    pub role: Option<String>,
+    pub period: Option<String>,
+}
+
+#[derive(Default, Deserialize, utoipa::ToSchema)]
+pub struct Note {
+    pub note: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NewIncident {
+    pub ride_id: Option<Uuid>,
+    pub category: String,
+    pub severity: String,
+    pub title: String,
+    pub description: String,
+    #[serde(default)]
+    pub participant_ids: Vec<Uuid>,
+}
+
+#[derive(Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IncidentPatch {
+    pub status: Option<String>,
+    pub severity: Option<String>,
+    pub assignee_id: Option<Uuid>,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Call {
+    pub participant_id: Uuid,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+pub struct Reason {
+    pub reason: String,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+pub struct Contact {
+    pub name: String,
+    pub relationship: String,
+    pub phone: String,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+pub struct DocumentReview {
+    pub status: String,
+    pub note: Option<String>,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Comment {
+    pub body: String,
+    pub visibility: String,
+    pub document_type: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Inspection {
+    pub scheduled_at: chrono::DateTime<chrono::Utc>,
+    pub location: String,
+    pub note: Option<String>,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Decision {
+    pub decision: String,
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub changes_requested: Vec<String>,
+}
+
+impl Filters {
+    /// Validate paging/filter inputs and encode the parameters used by SQL projections.
+    pub(crate) fn params(&self) -> Result<Value, AdminError> {
+        if self.limit.is_some_and(|n| !(1..=100).contains(&n)) {
+            return Err(bad("limit must be between 1 and 100"));
+        }
+        if let Some(ref state) = self.state {
+            member(state, &["active", "all"])?;
+        }
+        let mut v = serde_json::to_value(self).unwrap();
+        v["limit"] = json!(self.limit.unwrap_or(25));
+        Ok(v)
+    }
 }

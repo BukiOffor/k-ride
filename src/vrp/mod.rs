@@ -1,9 +1,9 @@
 pub mod dtos;
 pub mod handlers;
 pub mod models;
+pub mod realtime;
 pub mod services;
 pub mod swagger;
-pub mod realtime;
 
 pub use realtime::WsRegistry;
 

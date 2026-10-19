@@ -170,4 +170,3 @@ impl ToSql<Text, diesel::pg::Pg> for CarSize {
         Ok(serialize::IsNull::No)
     }
 }
-    

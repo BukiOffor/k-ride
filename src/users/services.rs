@@ -206,10 +206,7 @@ pub async fn create_user(
 
         let user_dto = UserDto::from(user).with_driver_profile(profile.into());
 
-        Ok(Message::context(
-            "User created successfully.",
-            user_dto,
-        ))
+        Ok(Message::context("User created successfully.", user_dto))
     } else {
         // Create User object from DTO
         let new_user: User = payload.try_into()?;
@@ -389,10 +386,7 @@ pub async fn register_user(
 
         let user_dto = UserDto::from(user).with_driver_profile(profile.into());
 
-        Ok(Message::context(
-            "User created successfully.",
-            user_dto,
-        ))
+        Ok(Message::context("User created successfully.", user_dto))
     } else {
         // Create User object from DTO
         let new_user: User = payload.try_into()?;
