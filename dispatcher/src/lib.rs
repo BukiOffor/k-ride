@@ -65,6 +65,7 @@ impl RideDispatcher {
         &mut self,
         driver: &DriverState,
     ) -> Result<(), Box<dyn std::error::Error>> {
+
         let cell = self.coordinate_to_cell(driver.lat, driver.lng)?;
         let cell_hex = cell.to_string();
 

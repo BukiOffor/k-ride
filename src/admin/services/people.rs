@@ -203,6 +203,8 @@ pub async fn live_drivers(s: Arc<AppState>, c: Claims) -> Result<Value, AdminErr
         )
     })?;
 
+    tracing::info!("live drivers: {:#?}", live);
+
     let drivers: Vec<Value> = live
         .into_iter()
         .filter(|(d, _)| Uuid::parse_str(&d.driver_id).is_ok())
