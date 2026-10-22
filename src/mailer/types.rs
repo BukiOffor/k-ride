@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 /// An Event over a channel that triggers mail actions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MailerEvent {
+    /// Wake a background worker; the durable outbox owns the email contents.
+    DrainOutbox,
     SendInvitationEmail {
         name: String,
         url: String,
@@ -51,6 +53,7 @@ pub enum MailerEvent {
 impl MailerEvent {
     pub fn name(&self) -> String {
         match self {
+            Self::DrainOutbox => "DrainOutbox".into(),
             MailerEvent::SendInvitationEmail { .. } => "SendInvitationEmail".to_string(),
             MailerEvent::SendWelcomeEmail { .. } => "SendWelcomeEmail".to_string(),
             MailerEvent::SendPasswordResetEmail { .. } => "SendPasswordResetEmail".to_string(),

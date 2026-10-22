@@ -415,4 +415,74 @@ diesel::allow_tables_to_appear_in_same_query!(
     ride_ratings,
     safety_events,
     idempotency_keys,
+    scheduled_rides,
+    email_outbox,
+    scheduled_events,
 );
+
+// Scheduled bookings and durable delivery queues (2026-10-22 migration).
+diesel::table! {
+    scheduled_rides (id) {
+        id -> Uuid,
+        passenger_id -> Uuid,
+        driver_id -> Nullable<Uuid>,
+        estimate_id -> Uuid,
+        option_id -> Text,
+        option_snapshot -> Jsonb,
+        pickup -> Jsonb,
+        destination -> Jsonb,
+        route -> Jsonb,
+        fare -> Jsonb,
+        currency -> Text,
+        fare_total_minor -> Int8,
+        scheduled_at -> Timestamp,
+        timezone -> Text,
+        duration_seconds -> Int4,
+        buffer_minutes -> Int4,
+        status -> Text,
+        ride_id -> Nullable<Uuid>,
+        version -> Int4,
+        cancellation_reason -> Nullable<Text>,
+        next_broadcast_at -> Nullable<Timestamp>,
+        reminder_sent -> Bool,
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
+    }
+}
+diesel::table! {
+    email_outbox (id) {
+        sequence_id -> Int8,
+        id -> Uuid,
+        aggregate_id -> Uuid,
+        event_key -> Text,
+        recipient_id -> Uuid,
+        recipient -> Text,
+        subject -> Text,
+        body -> Text,
+        transport -> Text,
+        attempts -> Int4,
+        next_attempt_at -> Timestamp,
+        lease_token -> Nullable<Uuid>,
+        lease_until -> Nullable<Timestamp>,
+        sent_at -> Nullable<Timestamp>,
+        dead_at -> Nullable<Timestamp>,
+        provider_message_id -> Nullable<Text>,
+        last_error -> Nullable<Text>,
+        created_at -> Timestamp,
+    }
+}
+diesel::table! {
+    scheduled_events (id) {
+        sequence_id -> Int8,
+        id -> Uuid,
+        scheduled_ride_id -> Uuid,
+        kind -> Text,
+        payload -> Jsonb,
+        broadcast -> Bool,
+        driver_ids -> Array<Uuid>,
+        created_at -> Timestamp,
+        delivered_at -> Nullable<Timestamp>,
+        lease_token -> Nullable<Uuid>,
+        lease_until -> Nullable<Timestamp>,
+    }
+}

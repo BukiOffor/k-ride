@@ -57,13 +57,18 @@ async fn main() {
         std::time::Duration::from_secs(60),
     );
 
+    let (mailer, mail_receiver) = async_channel::bounded(256);
     let state: Arc<AppState> = AppState {
+        mailer,
         pool: pool.clone(),
         logger: logger.clone(),
         dispatcher: Arc::new(dispatcher),
         ws_registry,
     }
     .into();
+
+    let _mail_workers = k_rides::mailer::worker::start(state.clone(), mail_receiver);
+    let _scheduled_worker = k_rides::vrp::scheduled_worker::start(state.clone());
 
     // Seed default root user if no root user exists
     if let Err(e) = k_rides::users::services::seed_root_user(state.clone()).await {
@@ -116,6 +121,7 @@ async fn main() {
     openapi.merge(VrpApiDoc::openapi());
     openapi.merge(AuthApiDoc::openapi());
     openapi.merge(LogsApiDoc::openapi());
+    openapi.merge(k_rides::vrp::handlers::scheduled::ScheduledApiDoc::openapi());
     openapi.merge(k_rides::admin::swagger::AdminApiDoc::openapi());
 
     let ws_routes =

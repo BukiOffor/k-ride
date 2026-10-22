@@ -31,6 +31,8 @@ pub fn module_routes(state: Arc<AppState>) -> Router {
         .route("/reports/export", get(reports::export))
         .route("/rides", get(rides::rides))
         .route("/rides/{id}", get(rides::ride))
+        .route("/rides/{id}/match", post(rides::match_driver))
+        .route("/rides/{id}/assign", post(rides::match_driver))
         .route("/sos", get(safety::sos))
         .route("/sos/{id}/acknowledge", post(safety::acknowledge))
         .route("/sos/{id}/resolve", post(safety::resolve))

@@ -54,6 +54,8 @@ pub type Logger = async_channel::Sender<logs::ActivityLog>;
 
 #[derive(Clone)]
 pub struct AppState {
+    /// Bounded email wakeup channel; delivery runs in async outbox workers.
+    pub mailer: async_channel::Sender<mailer::types::MailerEvent>,
     pub pool: Arc<Pool>,
     pub logger: Logger,
     pub dispatcher: Arc<RideDispatcher>,

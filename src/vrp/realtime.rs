@@ -217,6 +217,12 @@ impl WsRegistry {
         // 2. Clean up abandoned ride broadcast channels with 0 active subscribers
         self.ride_channels
             .retain(|_ride_id, bcast| bcast.receiver_count() > 0);
+        // Retire unused booking channels, preserving senders currently being subscribed to.
+        self.admin_channels.retain(|name, channel| {
+            !name.starts_with("scheduled:")
+                || channel.receiver_count() > 0
+                || channel.strong_count() > 1
+        });
     }
 
     /// Checks if a driver currently has an active WebSocket connection in RAM.
@@ -379,6 +385,30 @@ async fn may_subscribe(state: &AppState, user_id: Uuid, ride_id: Uuid, is_admin:
         .unwrap_or(false)
 }
 
+/// Authorize a future-booking channel using current assignment; former drivers lose access after release.
+async fn may_subscribe_scheduled(
+    state: &AppState,
+    user: Uuid,
+    booking: Uuid,
+    is_admin: bool,
+) -> bool {
+    if is_admin {
+        return true;
+    }
+    use diesel::sql_types::{Bool, Uuid as SqlUuid};
+    use diesel_async::RunQueryDsl;
+    #[derive(diesel::QueryableByName)]
+    struct Allowed {
+        #[diesel(sql_type=Bool)]
+        allowed: bool,
+    }
+    let Ok(mut db) = state.pool.get().await else {
+        return false;
+    };
+    diesel::sql_query("SELECT EXISTS(SELECT 1 FROM scheduled_rides WHERE id=$1 AND (passenger_id=$2 OR driver_id=$2)) AS allowed")
+      .bind::<SqlUuid,_>(booking).bind::<SqlUuid,_>(user).get_result::<Allowed>(&mut db).await.map(|r|r.allowed).unwrap_or(false)
+}
+
 /// Handles the upgraded WebSocket connection across the 4 phases.
 async fn handle_socket(
     state: Arc<AppState>,
@@ -491,11 +521,26 @@ async fn handle_socket(
                                 }
                                 IncomingWsFrame::Subscribe { channel } => {
                                     tracing::debug!("User {} subscribed to {}", user_id, channel);
-                                    if is_admin
+                                    let scheduled_id = channel
+                                        .strip_prefix("scheduled:")
+                                        .and_then(|x| x.parse::<Uuid>().ok());
+                                    let scheduled_allowed = if let Some(id) = scheduled_id {
+                                        may_subscribe_scheduled(
+                                            &app_state_clone,
+                                            user_id,
+                                            id,
+                                            is_admin,
+                                        )
+                                        .await
+                                    } else {
+                                        false
+                                    };
+                                    if ((is_admin
                                         && matches!(
                                             channel.as_str(),
                                             "admin:rides" | "admin:safety"
-                                        )
+                                        ))
+                                        || scheduled_allowed)
                                         && !admin_subscriptions.contains_key(&channel)
                                     {
                                         let mut rx = app_state_clone
@@ -503,12 +548,16 @@ async fn handle_socket(
                                             .admin_channel(&channel)
                                             .subscribe();
                                         let tx = outgoing_tx.clone();
+                                        let subscription_state = app_state_clone.clone();
                                         admin_subscriptions.insert(
                                             channel.clone(),
                                             tokio::spawn(async move {
                                                 loop {
                                                     match rx.recv().await {
                                                         Ok(event) => {
+                                                            if let Some(id)=scheduled_id {
+                                                                if !may_subscribe_scheduled(&subscription_state,user_id,id,is_admin).await {break;}
+                                                            }
                                                             if tx
                                                                 .send(OutgoingWsMessage::Event {
                                                                     event,
@@ -530,7 +579,7 @@ async fn handle_socket(
                                                                 ride_version: None,
                                                                 occurred_at: chrono::Utc::now()
                                                                     .to_rfc3339(),
-                                                                payload: serde_json::json!({"type":"admin.resync_required"}),
+                                                                payload: serde_json::json!({"type":if scheduled_id.is_some(){"scheduled.resync_required"}else{"admin.resync_required"}}),
                                                             };
                                                             if tx
                                                                 .send(OutgoingWsMessage::Event {

@@ -113,14 +113,14 @@ async fn database_projection_and_safety_contracts() {
     assert_eq!(blocked.0, StatusCode::CONFLICT);
     let people = query(
         &mut db,
-        &page_sql("admin_people_view", "role='Driver'"),
+        &page_sql("admin_people_view", "role='Driver' AND id=$2"),
         Filters {
             limit: Some(1),
             ..Default::default()
         }
         .params()
         .unwrap(),
-        admin,
+        driver,
     )
     .await
     .unwrap();

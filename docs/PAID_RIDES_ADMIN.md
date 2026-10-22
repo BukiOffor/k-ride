@@ -35,6 +35,7 @@ frontend service adapters and removal of the preview label belong in the dashboa
 | GET | `/admin/overview` | `period=week\|month\|quarter`; current primary counts, period performance metrics and latest active SOS |
 | GET | `/admin/rides` | `state=active\|all`, `status`, `sos`, `q`, `cursor`, `limit`; chip counts included |
 | GET | `/admin/rides/{id}` | Network detail, identifiers, reference, route, fare/payment, timestamps, tracking, safety and durable events |
+| POST | `/admin/rides/{id}/match` | `{ "driverId": "uuid" }`; manually match an unmatched ride (`REQUESTED`, `SEARCHING`, `NO_DRIVERS`) to an approved driver (also `/assign`) |
 | GET | `/admin/reports` | `period=week\|month\|quarter` (7/30/90 trailing days), previous-period deltas and daily chart series |
 | GET | `/admin/reports/export` | Same period; synchronous CSV download, not email |
 

@@ -475,3 +475,8 @@ The authenticated `/api/v1/admin` network, verification, safety, people, quality
 and reporting APIs are documented in [docs/PAID_RIDES_ADMIN.md](docs/PAID_RIDES_ADMIN.md)
 and included in Swagger. The WebSocket now requires a JWT/cookie and authorizes
 ride subscriptions; query/path user IDs cannot override authenticated identity.
+
+## Scheduled rides
+
+Immediate broadcast, driver reservations, fare locking, pickup-time activation and
+Resend/SMTP email delivery are documented in [docs/SCHEDULED_RIDES.md](docs/SCHEDULED_RIDES.md).

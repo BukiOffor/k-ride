@@ -266,6 +266,12 @@ pub struct Decision {
     pub changes_requested: Vec<String>,
 }
 
+#[derive(Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchDriver {
+    pub driver_id: Uuid,
+}
+
 impl Filters {
     /// Validate paging/filter inputs and encode the parameters used by SQL projections.
     pub(crate) fn params(&self) -> Result<Value, AdminError> {

@@ -1,9 +1,11 @@
+pub mod scheduled;
 pub mod cars;
 pub mod drivers;
 pub mod rides;
 
 pub fn routes(state: Arc<AppState>) -> Router {
     Router::new()
+        .merge(scheduled::routes(state.clone()))
         .merge(cars::routes(state.clone()))
         .merge(rides::routes(state.clone()))
         .merge(drivers::routes(state.clone()))

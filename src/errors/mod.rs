@@ -7,6 +7,8 @@ use crate::mailer::types::MailerEvent;
 
 #[derive(Error, Debug)]
 pub enum ModuleError {
+    #[error("{0}")]
+    Conflict(&'static str),
     #[error("New ride requests are restricted")]
     RequestsRestricted,
     #[error("{0}")]
@@ -100,6 +102,7 @@ impl ErrorMessage {
 impl IntoResponse for ModuleError {
     fn into_response(self) -> axum::response::Response {
         match self {
+            Self::Conflict(message) => (axum::http::StatusCode::CONFLICT, axum::Json(serde_json::json!({"code":"scheduling_conflict","message":message}))).into_response(),
             Self::RequestsRestricted => (axum::http::StatusCode::FORBIDDEN,axum::Json(serde_json::json!({"code":"requests_restricted","message":"New ride requests are restricted"}))).into_response(),
             Self::WrongCredentials | Self::InvalidToken | Self::AuthError => {
                 let message = ErrorMessage::default().build(self.to_string(), 401);
@@ -109,6 +112,9 @@ impl IntoResponse for ModuleError {
                 let message = ErrorMessage::default().build(self.to_string(), 403);
                 (axum::http::StatusCode::FORBIDDEN, axum::Json(message)).into_response()
             }
+            Self::DieselError(diesel::result::Error::DatabaseError(diesel::result::DatabaseErrorKind::UniqueViolation | diesel::result::DatabaseErrorKind::CheckViolation, _)) =>
+                (axum::http::StatusCode::CONFLICT,axum::Json(serde_json::json!({"code":"scheduling_conflict","message":"Conflicting booking or active journey"}))).into_response(),
+            Self::DieselError(diesel::result::Error::NotFound) => (axum::http::StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"code":"not_found","message":"Record not found"}))).into_response(),
             Self::DieselError(_) | Self::PoolError(_) | Self::InternalError(_) => {
                 let message = ErrorMessage::default().build(self.to_string(), 500);
                 (

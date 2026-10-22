@@ -1,3 +1,4 @@
+pub mod scheduled;
 pub mod cars;
 pub mod drivers;
 pub mod rides;
