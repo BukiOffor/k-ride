@@ -14,6 +14,7 @@ pub mod quality;
 pub mod reports;
 pub mod rides;
 pub mod safety;
+pub mod scheduled;
 
 /// Reject callers whose JWT role is neither Admin nor Root.
 pub(crate) fn require_admin(c: &Claims) -> Result<(), AdminError> {

@@ -37,22 +37,3 @@ impl RouteEstimate {
         self.duration_secs / 60.0
     }
 }
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct OsrmTableResponse {
-    pub(crate) code: String,
-    pub(crate) distances: Option<Vec<Vec<Option<f64>>>>,
-    pub(crate) durations: Option<Vec<Vec<Option<f64>>>>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct OsrmRouteResponse {
-    pub(crate) code: String,
-    pub(crate) routes: Option<Vec<OsrmRouteItem>>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct OsrmRouteItem {
-    pub(crate) distance: f64,
-    pub(crate) duration: f64,
-}

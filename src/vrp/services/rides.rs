@@ -25,15 +25,6 @@ use uuid::Uuid;
 /// Maximum road distance (metres) between a driver and the pickup point to be considered.
 pub const DISPATCH_RADIUS_M: f64 = 10_000.0;
 
-/// Public OSRM demo server, used when `OSRM_URL` is not set.
-const DEFAULT_OSRM_URL: &str = "http://router.project-osrm.org";
-
-/// OSRM base URL used to rank candidate drivers by driving ETA.
-/// Falls back to Haversine distance inside the dispatcher if OSRM is unreachable.
-fn osrm_url() -> String {
-    std::env::var("OSRM_URL").unwrap_or_else(|_| DEFAULT_OSRM_URL.to_string())
-}
-
 // =========================================================================================
 // Idempotency Helpers
 // =========================================================================================
@@ -118,9 +109,19 @@ pub async fn estimate_fare(
         ));
     }
 
-    // 2. Compute dynamic route using HTTP client
-    let client = reqwest::Client::new();
-    let route_res = compute_route(&client, &payload.pickup.point, &payload.destination.point).await;
+    // Release the database connection while routing and driver lookup await external services.
+    drop(conn);
+
+    // 2. Compute a validated road route
+    let route_res = compute_route(&payload.pickup.point, &payload.destination.point)
+        .await
+        .map_err(|error| match error {
+            dispatcher::routing::RoutingError::NoRoute => ModuleError::RouteNotAvailable,
+            dispatcher::routing::RoutingError::InvalidRequest => {
+                ModuleError::BadRequest("Invalid routing request")
+            }
+            _ => ModuleError::RoutingUnavailable,
+        })?;
 
     let route = Route {
         points: route_res.points,
@@ -132,9 +133,9 @@ pub async fn estimate_fare(
     // 3. For each product, calculate FareQuote and check candidate drivers nearby
     let mut estimate_options = Vec::new();
 
-    // Query drivers within the dispatch radius, ranked by OSRM driving ETA (Haversine fallback)
+    // Query drivers within the dispatch radius, ranked by validated driver-to-pickup road ETA
     let mut dispatcher = (*app_state.dispatcher).clone();
-    let osrm = osrm_url();
+    let osrm = dispatcher::routing::primary_url();
     let candidates = dispatcher
         .query_within_radius_routed(
             payload.pickup.point.lat,
@@ -146,12 +147,12 @@ pub async fn estimate_fare(
         .unwrap_or_default();
 
     // Nearest driver's ETA to pickup (results are sorted nearest first).
-    // Without an OSRM duration, estimate from distance at ~30 km/h urban speed.
-    let nearest_pickup_eta_seconds = candidates.get(0).map(|c| {
-        c.duration_secs
-            .unwrap_or(c.distance_m / (30_000.0 / 3600.0))
-            .round() as i64
-    });
+    // Routed candidates always carry a validated driving duration.
+    let nearest_pickup_eta_seconds = candidates
+        .as_slice()
+        .first()
+        .and_then(|c| c.duration_secs)
+        .map(|seconds| seconds.round() as i64);
 
     for opt in active_options {
         let fare_quote = calculate_fare_quote(&opt, route.distance_meters, route.duration_seconds);
@@ -181,6 +182,7 @@ pub async fn estimate_fare(
         created_at: Utc::now().naive_utc(),
     };
 
+    let mut conn = app_state.pool.get().await?;
     diesel::insert_into(fare_estimates::table)
         .values(&estimate_record)
         .execute(&mut conn)
@@ -241,6 +243,26 @@ pub async fn request_ride(
 
     if estimate.expires_at < Utc::now().naive_utc() {
         return Err(ModuleError::Error("Fare estimate expired".into()));
+    }
+
+    // Refuse legacy approximate quotes created before strict road routing was enabled.
+    if estimate.route.get("source").and_then(|v| v.as_str()) != Some("road")
+        || estimate
+            .route
+            .get("distanceMeters")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+            <= 0
+        || estimate
+            .route
+            .get("durationSeconds")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+            <= 0
+    {
+        return Err(ModuleError::BadRequest(
+            "Obtain a fresh road-route estimate before booking",
+        ));
     }
 
     // Fetch RideOption
@@ -991,7 +1013,7 @@ pub async fn dispatch_ride_candidates(
 
     // Query online drivers within the dispatch radius, ranked by OSRM driving ETA
     let mut dispatcher = (*app_state.dispatcher).clone();
-    let osrm = osrm_url();
+    let osrm = dispatcher::routing::primary_url();
     let candidates = dispatcher
         .query_within_radius_routed(
             pickup.point.lat,
@@ -1064,10 +1086,10 @@ pub async fn dispatch_ride_candidates(
 
             let offer_id = Uuid::now_v7();
             let pickup_dist_m = candidate.distance_m.round() as i64;
-            let pickup_eta_s = candidate
-                .duration_secs
-                .map(|s| s.round() as i64)
-                .unwrap_or(180);
+            let Some(pickup_duration) = candidate.duration_secs else {
+                continue;
+            };
+            let pickup_eta_s = pickup_duration.round() as i64;
 
             let offer = RideOfferRecord {
                 id: offer_id,

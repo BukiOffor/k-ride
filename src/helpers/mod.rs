@@ -47,3 +47,6 @@ pub fn parse_time_stamp(date_str: &str, time: &str) -> Result<NaiveDateTime, Mod
     let naive_datetime = naive_date.and_time(time);
     Ok(naive_datetime)
 }
+
+#[cfg(test)]
+mod routing_tests;

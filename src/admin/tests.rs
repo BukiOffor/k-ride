@@ -197,3 +197,50 @@ async fn database_projection_and_safety_contracts() {
         .unwrap();
     db.batch_execute("ROLLBACK").await.unwrap();
 }
+
+/// Reject malformed admin scheduled filters before acquiring a database connection.
+#[test]
+fn scheduled_filter_contracts() {
+    assert_eq!(
+        ScheduledRideFilters::default().params().unwrap()["limit"],
+        25
+    );
+    for value in [0, 101] {
+        assert!(
+            ScheduledRideFilters {
+                limit: Some(value),
+                ..Default::default()
+            }
+            .params()
+            .is_err()
+        );
+    }
+    assert!(
+        ScheduledRideFilters {
+            status: Some("open".into()),
+            ..Default::default()
+        }
+        .params()
+        .is_err()
+    );
+    let now = chrono::Utc::now();
+    assert!(
+        ScheduledRideFilters {
+            from: Some(now),
+            to: Some(now),
+            ..Default::default()
+        }
+        .params()
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<AssignScheduledDriver>(
+            json!({"driverId":Uuid::now_v7(),"version":1,"force":true})
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<AssignScheduledDriver>(json!({"driverId":Uuid::now_v7()}))
+            .is_err()
+    );
+}

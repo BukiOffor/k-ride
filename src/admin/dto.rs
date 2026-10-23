@@ -286,3 +286,53 @@ impl Filters {
         Ok(v)
     }
 }
+
+/// Network-wide scheduled bookings, with optional participant and pickup-window filters.
+#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ScheduledRideFilters {
+    pub cursor: Option<Uuid>,
+    pub limit: Option<i64>,
+    pub status: Option<String>,
+    pub passenger_id: Option<Uuid>,
+    pub driver_id: Option<Uuid>,
+    pub from: Option<chrono::DateTime<chrono::Utc>>,
+    pub to: Option<chrono::DateTime<chrono::Utc>>,
+}
+impl ScheduledRideFilters {
+    /// Validate paging/status/date filters before building parameterized SQL inputs.
+    pub(crate) fn params(&self) -> Result<Value, crate::admin::errors::AdminError> {
+        use crate::admin::errors::bad;
+        let limit = self.limit.unwrap_or(25);
+        if !(1..=100).contains(&limit) {
+            return Err(bad("limit must be between 1 and 100"));
+        }
+        if let Some(status) = &self.status {
+            crate::admin::services::member(
+                status,
+                &[
+                    "OPEN",
+                    "RESERVED",
+                    "ACTIVATED",
+                    "COMPLETED",
+                    "CANCELLED",
+                    "EXPIRED",
+                ],
+            )?;
+        }
+        if matches!((self.from, self.to), (Some(from), Some(to)) if from >= to) {
+            return Err(bad("from must be earlier than to"));
+        }
+        Ok(
+            json!({"cursor":self.cursor,"limit":limit,"status":self.status,"passengerId":self.passenger_id,"driverId":self.driver_id,"from":self.from,"to":self.to}),
+        )
+    }
+}
+
+/// Driver selected by an administrator and the booking version they reviewed.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AssignScheduledDriver {
+    pub driver_id: Uuid,
+    pub version: i32,
+}

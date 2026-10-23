@@ -29,5 +29,7 @@ pub async fn match_driver(
     Path(id): Path<Uuid>,
     Json(p): Json<dto::MatchDriver>,
 ) -> Result<Json<Value>, AdminError> {
-    Ok(Json(services::rides::match_driver(s, c, id, p.driver_id).await?))
+    Ok(Json(
+        services::rides::match_driver(s, c, id, p.driver_id).await?,
+    ))
 }

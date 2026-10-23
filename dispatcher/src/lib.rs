@@ -1,6 +1,6 @@
 pub mod types;
+pub mod routing;
 pub use types::{DriverState, RankedDriver, RideDispatcher, RouteEstimate};
-use types::{OsrmRouteResponse, OsrmTableResponse};
 
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -218,38 +218,9 @@ impl RideDispatcher {
         Ok(candidate_drivers)
     }
 
-    async fn try_osrm_table(
-        &self,
-        osrm_url: &str,
-        pickup_lat: f64,
-        pickup_lng: f64,
-        candidates: &[DriverState],
-    ) -> Result<OsrmTableResponse, Box<dyn std::error::Error + Send + Sync>> {
-        let mut coords = Vec::with_capacity(candidates.len() + 1);
-        coords.push(format!("{:.6},{:.6}", pickup_lng, pickup_lat));
-        for d in candidates {
-            coords.push(format!("{:.6},{:.6}", d.lng, d.lat));
-        }
-
-        let url = format!(
-            "{}/table/v1/driving/{}?sources=0&annotations=distance,duration",
-            osrm_url.trim_end_matches('/'),
-            coords.join(";")
-        );
-
-        let resp = self.http_client.get(&url).send().await?.error_for_status()?;
-        let data = resp.json::<OsrmTableResponse>().await?;
-        if data.code != "Ok" {
-            return Err(format!("OSRM returned code: {}", data.code).into());
-        }
-        Ok(data)
-    }
-
-    /// Finds drivers within `radius_m`, ranking by OSRM driving ETA and road distance.
-    ///
-    /// If `osrm_url` is provided, it queries the OSRM Table API in a single batch.
-    /// If OSRM is unavailable, times out, or fails, it automatically falls back
-    /// to Haversine straight-line distance.
+    /// Uses spatial distance only to shortlist; routed ranking never invents road ETAs.
+    /// The exposed gateway has no Table API. Route at most five nearby candidates
+    /// from driver to pickup, with a five-second budget for the whole shortlist.
     pub async fn query_within_radius_routed(
         &mut self,
         pickup_lat: f64,
@@ -259,77 +230,30 @@ impl RideDispatcher {
     ) -> Result<Vec<RankedDriver>, Box<dyn std::error::Error>> {
         let pickup = LatLng::new(pickup_lat, pickup_lng)?;
         let spacing = VENUE_RESOLUTION.edge_length_m() * 3f64.sqrt();
-        let k = (radius_m / spacing).ceil() as u32 + 1; // +1 so the edges aren't missed
-
+        let k = (radius_m / spacing).ceil() as u32 + 1;
         let candidates = self.query_candidates(pickup_lat, pickup_lng, k).await?;
-        if candidates.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // 1. Try OSRM routing if URL is provided
-        if let Some(url) = osrm_url {
-            match self.try_osrm_table(url, pickup_lat, pickup_lng, &candidates).await {
-                Ok(osrm_resp) => {
-                    if let (Some(distances), Some(durations)) = (osrm_resp.distances, osrm_resp.durations) {
-                        if !distances.is_empty() && !durations.is_empty() {
-                            let dist_row = &distances[0];
-                            let dur_row = &durations[0];
-                            let mut results = Vec::new();
-
-                            for (i, driver) in candidates.into_iter().enumerate() {
-                                let osrm_dist = dist_row.get(i + 1).and_then(|v| *v);
-                                let osrm_dur = dur_row.get(i + 1).and_then(|v| *v);
-
-                                // Use OSRM road distance if available, otherwise Haversine
-                                let dist = match osrm_dist {
-                                    Some(d) => d,
-                                    None => match LatLng::new(driver.lat, driver.lng) {
-                                        Ok(c) => c.distance_m(pickup),
-                                        Err(_) => continue,
-                                    },
-                                };
-
-                                if dist <= radius_m {
-                                    results.push(RankedDriver {
-                                        driver,
-                                        distance_m: dist,
-                                        duration_secs: osrm_dur,
-                                        is_osrm_routed: osrm_dur.is_some(),
-                                    });
-                                }
-                            }
-
-                            // Sort by driving ETA (duration) if available, otherwise distance
-                            results.sort_by(|a, b| match (a.duration_secs, b.duration_secs) {
-                                (Some(d1), Some(d2)) => d1.total_cmp(&d2),
-                                _ => a.distance_m.total_cmp(&b.distance_m),
-                            });
-
-                            return Ok(results);
-                        }
-                    }
-                }
-                Err(err) => {
-                    eprintln!("Warning: OSRM query failed ({}), falling back to Haversine.", err);
-                }
+        let mut shortlist: Vec<_> = candidates.into_iter().filter_map(|driver| {
+            let distance = LatLng::new(driver.lat, driver.lng).ok()?.distance_m(pickup);
+            (distance <= radius_m).then_some(RankedDriver {
+                driver, distance_m: distance, duration_secs: None, is_osrm_routed: false,
+            })
+        }).collect();
+        shortlist.sort_by(|a,b| a.distance_m.total_cmp(&b.distance_m));
+        let Some(base) = osrm_url else { return Ok(shortlist); };
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut results = Vec::new();
+        for candidate in shortlist.into_iter().take(5) {
+            match tokio::time::timeout_at(deadline, routing::route(base,
+                [candidate.driver.lng, candidate.driver.lat], [pickup_lng, pickup_lat])).await {
+                Ok(Ok(route)) if route.distance <= radius_m => results.push(RankedDriver {
+                    driver: candidate.driver, distance_m: route.distance,
+                    duration_secs: Some(route.duration), is_osrm_routed: true,
+                }),
+                Ok(Err(routing::RoutingError::Unavailable | routing::RoutingError::Configuration)) | Err(_) => break,
+                _ => {},
             }
         }
-
-        // 2. Fallback: Haversine straight-line distance
-        let mut results: Vec<RankedDriver> = candidates
-            .into_iter()
-            .filter_map(|d| {
-                let dist = LatLng::new(d.lat, d.lng).ok()?.distance_m(pickup);
-                (dist <= radius_m).then_some(RankedDriver {
-                    driver: d,
-                    distance_m: dist,
-                    duration_secs: None,
-                    is_osrm_routed: false,
-                })
-            })
-            .collect();
-
-        results.sort_by(|a, b| a.distance_m.total_cmp(&b.distance_m));
+        results.sort_by(|a,b| a.duration_secs.unwrap().total_cmp(&b.duration_secs.unwrap()));
         Ok(results)
     }
 
@@ -347,12 +271,7 @@ impl RideDispatcher {
         Ok(ranked.into_iter().map(|r| (r.driver, r.distance_m)).collect())
     }
 
-    /// Calculates driving distance and ETA between a pickup and dropoff location.
-    ///
-    /// If `osrm_url` is provided, it queries the OSRM Route API for exact turn-by-turn
-    /// road distance (meters) and duration (seconds).
-    /// If OSRM is unreachable or fails, it automatically falls back to Haversine straight-line
-    /// distance and estimates travel duration based on an average urban driving speed.
+    /// Returns validated road distance and duration, or an explicit routing error.
     pub async fn estimate_trip(
         &self,
         pickup_lat: f64,
@@ -361,64 +280,11 @@ impl RideDispatcher {
         dropoff_lng: f64,
         osrm_url: Option<&str>,
     ) -> Result<RouteEstimate, Box<dyn std::error::Error>> {
-        if let Some(url) = osrm_url {
-            let req_url = format!(
-                "{}/route/v1/driving/{:.6},{:.6};{:.6},{:.6}?overview=false",
-                url.trim_end_matches('/'),
-                pickup_lng,
-                pickup_lat,
-                dropoff_lng,
-                dropoff_lat
-            );
-
-            match self.http_client.get(&req_url).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    if let Ok(data) = resp.json::<OsrmRouteResponse>().await {
-                        if data.code == "Ok" {
-                            if let Some(routes) = data.routes {
-                                if let Some(route) = routes.first() {
-                                    return Ok(RouteEstimate {
-                                        distance_m: route.distance,
-                                        duration_secs: route.duration,
-                                        is_osrm_routed: true,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-                Ok(resp) => {
-                    eprintln!(
-                        "Warning: OSRM route request returned status {}, falling back to Haversine.",
-                        resp.status()
-                    );
-                }
-                Err(err) => {
-                    eprintln!(
-                        "Warning: OSRM route request failed ({}), falling back to Haversine.",
-                        err
-                    );
-                }
-            }
-        }
-
-        // Fallback: Haversine distance with urban speed estimation
-        let pickup = LatLng::new(pickup_lat, pickup_lng)?;
-        let dropoff = LatLng::new(dropoff_lat, dropoff_lng)?;
-        let straight_line_m = pickup.distance_m(dropoff);
-
-        // In urban road networks, actual route distance is typically ~35% longer than straight-line
-        let estimated_road_dist_m = straight_line_m * 1.35;
-        // Average urban driving speed: ~30 km/h (8.33 m/s)
-        let avg_speed_mps = 30.0 * 1000.0 / 3600.0;
-        let duration_secs = estimated_road_dist_m / avg_speed_mps;
-
-        Ok(RouteEstimate {
-            distance_m: straight_line_m,
-            duration_secs,
-            is_osrm_routed: false,
-        })
+        let base = osrm_url.map(str::to_owned).unwrap_or_else(routing::primary_url);
+        let route = routing::route(&base, [pickup_lng, pickup_lat], [dropoff_lng, dropoff_lat]).await?;
+        Ok(RouteEstimate { distance_m: route.distance, duration_secs: route.duration, is_osrm_routed: true })
     }
+
 }
 
 /// Current Unix time in seconds (with fractions).

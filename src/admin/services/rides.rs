@@ -70,7 +70,9 @@ pub async fn match_driver(
         return Err(bad("Driver profile and vehicle must be approved"));
     }
     if driver_status["onTrip"].as_bool().unwrap_or(false) {
-        return Err(conflict("Driver is already assigned to another active ride"));
+        return Err(conflict(
+            "Driver is already assigned to another active ride",
+        ));
     }
 
     // 2. Verify ride exists and is in an unassigned matchable state
@@ -200,7 +202,8 @@ pub async fn match_driver(
         .await?;
 
     // 4. Update memory registry
-    s.ws_registry.set_driver_active_ride(driver_id, Some(ride_id));
+    s.ws_registry
+        .set_driver_active_ride(driver_id, Some(ride_id));
     s.ws_registry.set_driver_online(driver_id, false);
 
     // 5. Broadcast to other drivers whose offers were withdrawn

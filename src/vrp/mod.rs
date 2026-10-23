@@ -21,6 +21,6 @@ pub use crate::errors::ModuleError as ApiError;
 
 pub use super::*;
 
-pub mod scheduled_worker;
 #[cfg(test)]
 mod scheduled_tests;
+pub mod scheduled_worker;

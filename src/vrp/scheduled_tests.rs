@@ -153,11 +153,205 @@ async fn scheduled_workflow_and_email_failover() {
         dispatcher: Arc::new(dispatcher::RideDispatcher::new(redis)),
         ws_registry: Arc::new(super::realtime::WsRegistry::new()),
     });
+    // Administrative assignment shares acceptance locks and emits one audit per mutation.
+    let admin_id = user(&s, false).await;
+    let mut db = connection(&s).await.unwrap();
+    query(&mut db, "UPDATE users SET role='Admin' WHERE id=$2 AND $1 IS NOT NULL RETURNING '{}'::jsonb AS data", json!({}), admin_id).await.unwrap();
+    drop(db);
+    let admin_passenger = user(&s, false).await;
+    let admin_driver = user(&s, true).await;
+    let admin_booking = booking(s.clone(), admin_passenger, 24).await;
+    let admin_booking_id: Uuid = serde_json::from_value(admin_booking["id"].clone()).unwrap();
+    use crate::admin::{
+        dto::{AssignScheduledDriver, ScheduledRideFilters},
+        services::scheduled as admin_scheduled,
+    };
+    assert_eq!(
+        admin_scheduled::list(
+            s.clone(),
+            claims(admin_passenger, RoleType::User),
+            ScheduledRideFilters::default()
+        )
+        .await
+        .unwrap_err()
+        .0,
+        axum::http::StatusCode::FORBIDDEN
+    );
+    let filters = || ScheduledRideFilters {
+        passenger_id: Some(admin_passenger),
+        status: Some("OPEN".into()),
+        ..Default::default()
+    };
+    let all = admin_scheduled::list(s.clone(), claims(admin_id, RoleType::Admin), filters())
+        .await
+        .unwrap();
+    assert_eq!(all["total"], 1);
+    assert_eq!(all["items"][0]["id"], admin_booking["id"]);
+    assert_eq!(
+        admin_scheduled::assign(
+            s.clone(),
+            claims(admin_passenger, RoleType::User),
+            admin_booking_id,
+            AssignScheduledDriver {
+                driver_id: admin_driver,
+                version: 1
+            }
+        )
+        .await
+        .unwrap_err()
+        .0,
+        axum::http::StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        admin_scheduled::assign(
+            s.clone(),
+            claims(admin_id, RoleType::Admin),
+            admin_booking_id,
+            AssignScheduledDriver {
+                driver_id: admin_driver,
+                version: 2
+            }
+        )
+        .await
+        .unwrap_err()
+        .0,
+        axum::http::StatusCode::CONFLICT
+    );
+    assert_eq!(
+        admin_scheduled::assign(
+            s.clone(),
+            claims(admin_id, RoleType::Admin),
+            admin_booking_id,
+            AssignScheduledDriver {
+                driver_id: admin_passenger,
+                version: 1
+            }
+        )
+        .await
+        .unwrap_err()
+        .0,
+        axum::http::StatusCode::FORBIDDEN
+    );
+    let assigned = admin_scheduled::assign(
+        s.clone(),
+        claims(admin_id, RoleType::Admin),
+        admin_booking_id,
+        AssignScheduledDriver {
+            driver_id: admin_driver,
+            version: 1,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(assigned["status"], "RESERVED");
+    assert_eq!(assigned["driverId"], json!(admin_driver));
+    assert_eq!(assigned["total"], admin_booking["total"]);
+    assert!(assigned["rideId"].is_null());
+    let retried = admin_scheduled::assign(
+        s.clone(),
+        claims(admin_id, RoleType::Root),
+        admin_booking_id,
+        AssignScheduledDriver {
+            driver_id: admin_driver,
+            version: 1,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(retried, assigned);
+    let mut db = connection(&s).await.unwrap();
+    let audited = query(&mut db, "SELECT jsonb_build_object('count',count(*)) AS data FROM admin_events WHERE target_id=$2 AND event_type='scheduled.driver_assigned' AND actor_id=($1->>'admin')::uuid", json!({"admin":admin_id}), admin_booking_id).await.unwrap();
+    assert_eq!(audited["count"], 1);
+    drop(db);
+    let other_passenger = user(&s, false).await;
+    let overlapping = booking(s.clone(), other_passenger, 24).await;
+    let overlapping_id = serde_json::from_value(overlapping["id"].clone()).unwrap();
+    assert_eq!(
+        admin_scheduled::assign(
+            s.clone(),
+            claims(admin_id, RoleType::Admin),
+            overlapping_id,
+            AssignScheduledDriver {
+                driver_id: admin_driver,
+                version: 1
+            }
+        )
+        .await
+        .unwrap_err()
+        .0,
+        axum::http::StatusCode::CONFLICT
+    );
+    // A driver and admin competing for the same booking must have exactly one winner.
+    let racing_driver = user(&s, true).await;
+    let admin_racing_driver = user(&s, true).await;
+    let (by_admin, by_driver) = tokio::join!(
+        admin_scheduled::assign(
+            s.clone(),
+            claims(admin_id, RoleType::Admin),
+            overlapping_id,
+            AssignScheduledDriver {
+                driver_id: admin_racing_driver,
+                version: 1
+            }
+        ),
+        accept(
+            s.clone(),
+            claims(racing_driver, RoleType::Driver),
+            overlapping_id,
+            1
+        )
+    );
+    assert_eq!(
+        usize::from(by_admin.is_ok()) + usize::from(by_driver.is_ok()),
+        1
+    );
     let p = user(&s, false).await;
     let p2 = user(&s, false).await;
     let p3 = user(&s, false).await;
     let d1 = user(&s, true).await;
     let d2 = user(&s, true).await;
+    // Legacy approximate and zero-distance estimates must never become paid bookings.
+    let legacy = estimate(&s, p).await;
+    for route in [
+        json!({"source":"approximate","distanceMeters":10000,"durationSeconds":1800}),
+        json!({"source":"road","distanceMeters":0,"durationSeconds":1800}),
+    ] {
+        let mut db = connection(&s).await.unwrap();
+        query(
+            &mut db,
+            "UPDATE fare_estimates SET route=$1 WHERE id=$2 RETURNING '{}'::jsonb AS data",
+            route,
+            legacy,
+        )
+        .await
+        .unwrap();
+        drop(db);
+        let scheduled = create(
+            s.clone(),
+            claims(p, RoleType::User),
+            ScheduleRideDto {
+                estimate_id: legacy,
+                option_id: "go".into(),
+                scheduled_at: Utc::now() + Duration::hours(2),
+                timezone: "Africa/Lagos".into(),
+            },
+        )
+        .await;
+        assert!(matches!(scheduled, Err(ModuleError::BadRequest(_))));
+        let immediate = super::services::rides::request_ride(
+            s.clone(),
+            claims(p, RoleType::User),
+            RideRequestDto {
+                estimate_id: legacy,
+                option_id: "go".into(),
+                payment_method_id: "cash".into(),
+                pickup: None,
+                destination: None,
+            },
+        )
+        .await;
+        assert!(matches!(immediate, Err(ModuleError::BadRequest(_))));
+    }
     let b = booking(s.clone(), p, 2).await;
     let id: Uuid = serde_json::from_value(b["id"].clone()).unwrap();
     let locked = b["total"].clone();
@@ -385,7 +579,7 @@ async fn scheduled_workflow_and_email_failover() {
         "COMPLETED"
     );
     let mut db = connection(&s).await.unwrap();
-    query(&mut db,"UPDATE email_outbox SET sent_at=(now() AT TIME ZONE 'UTC') WHERE recipient_id=ANY(ARRAY(SELECT jsonb_array_elements_text($1)::uuid)) RETURNING '{}'::jsonb AS data",json!([p,p2,p3,d1,d2]),id).await.unwrap();
+    query(&mut db,"UPDATE email_outbox SET sent_at=(now() AT TIME ZONE 'UTC') WHERE recipient_id=ANY(ARRAY(SELECT jsonb_array_elements_text($1)::uuid)) RETURNING '{}'::jsonb AS data",json!([p,p2,p3,d1,d2,admin_passenger,admin_driver,other_passenger,racing_driver,admin_racing_driver]),id).await.unwrap();
     drop(db);
     // A local fake API verifies stable idempotency headers across uncertain primary submissions.
     let status = Arc::new(AtomicU16::new(500));

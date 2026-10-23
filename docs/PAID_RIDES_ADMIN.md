@@ -182,3 +182,15 @@ database queries and transactions. `dto.rs` defines request/response contracts,
 `model.rs` defines database result models, `errors.rs` maps failures, and `swagger.rs`
 registers OpenAPI paths. Shared authorization, pagination and audit helpers live in
 `services/mod.rs`. The integration and unit checks live in `tests.rs`.
+
+## Scheduled ride administration
+
+- `GET /api/v1/admin/scheduled-rides` lists all passengers' scheduled bookings,
+  with optional status, passengerId, driverId, pickup-window and cursor filters.
+- `POST /api/v1/admin/scheduled-rides/{id}/assign` accepts `{ "driverId": "UUID", "version": 1 }`
+  to reserve an open booking through the existing scheduling locks and eligibility checks.
+
+Both require Admin/Root. Assignment preserves the locked fare, audits the change,
+and queues standard passenger/driver notifications. Existing assignments are not
+replaced. See the [frontend scheduled ride guide](SCHEDULED_RIDES_FRONTEND.md#admin-all-scheduled-rides-and-manual-assignment)
+for full contracts and examples.

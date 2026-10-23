@@ -97,6 +97,8 @@ First call the existing `POST /rides/estimate` with `pickup` and `destination` p
 Use its `estimateId` and the selected `options[].option.id` to create the booking.
 Obtain a fresh estimate when the passenger is ready to confirm so the quote has not expired.
 An option with `available: false` can still be scheduled; shared options cannot.
+Road routing is required: handle estimate errors `route_not_available` (422) and
+`routing_unavailable` (503), as described in [backend routing](OSRM_ROUTING.md).
 
 `POST /api/v1/rides/scheduled`
 
@@ -397,3 +399,75 @@ either provider or contain provider credentials.
 Successful booking HTTP responses confirm the database operation, not email delivery.
 There is no frontend email-delivery status endpoint. Show booking state from REST and
 in-app notifications; do not block confirmation screens while waiting for an email.
+
+## Admin: all scheduled rides and manual assignment
+
+Both endpoints require an **Admin or Root** access token/cookie. They use the same
+REST base `/api/v1`, booking object and pagination response described above.
+
+### List all bookings
+
+```text
+GET /api/v1/admin/scheduled-rides?limit=25
+GET /api/v1/admin/scheduled-rides?status=OPEN&limit=25
+GET /api/v1/admin/scheduled-rides?driverId=019a0abc-1234-7000-8000-000000000003&status=RESERVED
+```
+
+Without filters, this includes every passenger's bookings across all statuses,
+including history. Supported query parameters:
+
+| Parameter | Meaning |
+| --- | --- |
+| `cursor`, `limit` | UUID keyset pagination; default 25, maximum 100 |
+| `status` | One exact uppercase scheduled status |
+| `passengerId` | Filter by passenger UUID |
+| `driverId` | Filter by currently assigned driver UUID |
+| `from`, `to` | Inclusive/exclusive pickup timestamps; `from` must be earlier than `to` |
+
+Unknown parameters are rejected. Results are descending UUID, not pickup order.
+Response: `{ items: ScheduledRide[], nextCursor: string | null, total: number }`.
+There is no counts property or participant contact information in this response.
+For existing booking detail, Admin/Root can use `GET /api/v1/rides/scheduled/{id}`.
+
+### Assign a driver
+
+`POST /api/v1/admin/scheduled-rides/{id}/assign`
+
+```json
+{
+  "driverId": "019a0abc-1234-7000-8000-000000000003",
+  "version": 1
+}
+```
+
+Send the version of the booking the admin reviewed and a positive integer version.
+The response is 200 with the updated `ScheduledRide`: status `RESERVED`, selected
+`driverId`, incremented `version`, and unchanged locked fare. This does not start a
+live ride; `rideId` remains null until normal activation. Driver acceptance is not
+required after this administrative assignment.
+
+Only future `OPEN` bookings can be assigned. The driver must satisfy the same
+active-account, approval, verified vehicle/class/capacity, and trip/booking overlap
+checks used for driver acceptance. Being online is not required. The passenger
+cannot be assigned as their own driver. Assignment races with another admin or a
+driver acceptance have one winner.
+
+The operation atomically saves an admin audit event and queues the normal
+passenger/driver email, in-app and WebSocket notifications. Retrying an assignment
+already reserved to the same driver returns that reservation without duplicating
+the mutation/audit. A different driver on a reserved booking is a conflict; this
+endpoint does not replace existing assignments or modify activated/live rides.
+
+Admin errors use `{ code, message }`:
+
+| HTTP | Meaning |
+| --- | --- |
+| 400 | Invalid filters/body or nonpositive version |
+| 403 | Admin/Root required, or `driver_ineligible` for assignment |
+| 404 | Booking not found |
+| 409 | `invalid_transition`: stale version, closed/reserved booking or overlapping commitment |
+
+On 409 refresh the booking and require review before another assignment. Never
+silently retry with an updated version. Reuse the existing admin driver directory
+(`/api/v1/admin/drivers`) for driver selection; final eligibility is checked during
+assignment, so directory visibility alone does not guarantee assignability.

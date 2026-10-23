@@ -7,6 +7,10 @@ use crate::mailer::types::MailerEvent;
 
 #[derive(Error, Debug)]
 pub enum ModuleError {
+    #[error("No road route available for these locations")]
+    RouteNotAvailable,
+    #[error("Routing temporarily unavailable; please retry")]
+    RoutingUnavailable,
     #[error("{0}")]
     Conflict(&'static str),
     #[error("New ride requests are restricted")]
@@ -102,6 +106,8 @@ impl ErrorMessage {
 impl IntoResponse for ModuleError {
     fn into_response(self) -> axum::response::Response {
         match self {
+            Self::RouteNotAvailable => (axum::http::StatusCode::UNPROCESSABLE_ENTITY, axum::Json(serde_json::json!({"code":"route_not_available","message":"No road route available for these locations"}))).into_response(),
+            Self::RoutingUnavailable => (axum::http::StatusCode::SERVICE_UNAVAILABLE, [(axum::http::header::RETRY_AFTER, "30")], axum::Json(serde_json::json!({"code":"routing_unavailable","message":"Routing temporarily unavailable; please retry"}))).into_response(),
             Self::Conflict(message) => (axum::http::StatusCode::CONFLICT, axum::Json(serde_json::json!({"code":"scheduling_conflict","message":message}))).into_response(),
             Self::RequestsRestricted => (axum::http::StatusCode::FORBIDDEN,axum::Json(serde_json::json!({"code":"requests_restricted","message":"New ride requests are restricted"}))).into_response(),
             Self::WrongCredentials | Self::InvalidToken | Self::AuthError => {

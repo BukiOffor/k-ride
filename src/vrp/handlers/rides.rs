@@ -78,6 +78,8 @@ pub async fn get_viewer(
     request_body = EstimateRequestDto,
     responses(
         (status = 200, description = "Dynamic fare estimates across ride options", body = FareEstimateDto),
+        (status = 422, description = "No road route available for these locations"),
+        (status = 503, description = "Routing temporarily unavailable; retry later"),
         (status = 400, description = "Invalid coordinates or points"),
         (status = 401, description = "Unauthorized")
     ),

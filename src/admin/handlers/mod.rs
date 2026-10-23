@@ -18,6 +18,7 @@ pub mod quality;
 pub mod reports;
 pub mod rides;
 pub mod safety;
+pub mod scheduled;
 
 /// Mount the admin resource router under `/admin` for the API router.
 pub fn routes(state: Arc<AppState>) -> Router {
@@ -26,6 +27,8 @@ pub fn routes(state: Arc<AppState>) -> Router {
 /// Register admin endpoints and apply the shared role gate before dispatching requests.
 pub fn module_routes(state: Arc<AppState>) -> Router {
     Router::new()
+        .route("/scheduled-rides", get(scheduled::list))
+        .route("/scheduled-rides/{id}/assign", post(scheduled::assign))
         .route("/overview", get(reports::overview))
         .route("/reports", get(reports::reports))
         .route("/reports/export", get(reports::export))

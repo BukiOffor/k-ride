@@ -83,7 +83,7 @@ pub async fn create(s: Arc<AppState>, c: Claims, p: ScheduleRideDto) -> Result<V
   if let Some(mut prior)=prior {let same=prior.data.as_object_mut().unwrap().remove("_matches")==Some(json!(true));if same{return Ok(prior.data);}return Err(ModuleError::Conflict("Estimate already used by another scheduled booking"));}
   validate_pickup(p.scheduled_at,Utc::now())?;
   let params=json!({"estimate":p.estimate_id,"option":p.option_id,"scheduledAt":p.scheduled_at,"timezone":p.timezone,"buffer":buffer_minutes(),"id":Uuid::now_v7()});
-  let v=query(db,r#"WITH estimate AS (SELECT e.*,o.id AS option_id,to_jsonb(o) AS option_snapshot,q->'fare' AS quote FROM fare_estimates e JOIN ride_options o ON o.id=$1->>'option' CROSS JOIN LATERAL jsonb_array_elements(e.options) q WHERE e.id=($1->>'estimate')::uuid AND e.user_id=$2 AND e.expires_at>(now() AT TIME ZONE 'UTC') AND o.is_active AND NOT o.shared AND q->'option'->>'id'=o.id), inserted AS (
+  let v=query(db,r#"WITH estimate AS (SELECT e.*,o.id AS option_id,to_jsonb(o) AS option_snapshot,q->'fare' AS quote FROM fare_estimates e JOIN ride_options o ON o.id=$1->>'option' CROSS JOIN LATERAL jsonb_array_elements(e.options) q WHERE e.id=($1->>'estimate')::uuid AND e.user_id=$2 AND e.expires_at>(now() AT TIME ZONE 'UTC') AND o.is_active AND NOT o.shared AND e.route->>'source'='road' AND (e.route->>'distanceMeters')::bigint>0 AND (e.route->>'durationSeconds')::bigint>0 AND q->'option'->>'id'=o.id), inserted AS (
   INSERT INTO scheduled_rides(id,passenger_id,estimate_id,option_id,option_snapshot,pickup,destination,route,fare,currency,fare_total_minor,scheduled_at,timezone,duration_seconds,buffer_minutes,next_broadcast_at)
   SELECT ($1->>'id')::uuid,$2,id,option_id,option_snapshot,pickup,destination,route,quote || jsonb_build_object('isEstimate',false,'range',jsonb_build_object('low',quote->'total','high',quote->'total'),'waiting',(quote->'waiting') || jsonb_build_object('perMinute',jsonb_build_object('amountMinor',0,'currency',quote->'total'->>'currency'))),quote->'total'->>'currency',(quote->'total'->>'amountMinor')::bigint,($1->>'scheduledAt')::timestamptz AT TIME ZONE 'UTC',$1->>'timezone',GREATEST(COALESCE((route->>'durationSeconds')::int,3600),60),($1->>'buffer')::int,($1->>'scheduledAt')::timestamptz AT TIME ZONE 'UTC'-interval '30 minutes' FROM estimate RETURNING id)
   SELECT jsonb_build_object('id',id) AS data FROM inserted"#,params.clone(),c.user_id).await.map_err(|e|if matches!(e,ModuleError::DieselError(diesel::result::Error::NotFound)){ModuleError::BadRequest("Invalid, expired or unavailable private-ride estimate")}else{e})?;
@@ -151,13 +151,13 @@ pub async fn detail(s: Arc<AppState>, c: Claims, id: Uuid) -> Result<Value, Modu
     let p = json!({"user":c.user_id,"admin":matches!(c.role,crate::users::RoleType::Admin|crate::users::RoleType::Root),"driver":matches!(c.role,crate::users::RoleType::Driver)});
     query(&mut db,"SELECT data FROM scheduled_ride_view WHERE id=$2 AND (passenger_id=($1->>'user')::uuid OR driver_id=($1->>'user')::uuid OR ($1->>'admin')::boolean OR (($1->>'driver')::boolean AND status='OPEN' AND scheduled_at>(now() AT TIME ZONE 'UTC') AND scheduled_driver_eligible(($1->>'user')::uuid,option_snapshot)))",p,id).await
 }
-/// Take row locks and atomically reserve an open booking; both broadcast and board acceptances call this path.
-pub(crate) async fn accept_locked(
+/// Lock and reserve through the common driver/admin path; the boolean identifies a new assignment for auditing.
+pub(crate) async fn reserve_locked(
     db: &mut Connection<'_>,
     driver: Uuid,
     id: Uuid,
     expected_version: i32,
-) -> Result<Value, ModuleError> {
+) -> Result<(Value, bool), ModuleError> {
     let before = detail_query(db, id).await?;
     let passenger: Uuid = serde_json::from_value(before["passengerId"].clone())?;
     if driver == passenger {
@@ -166,7 +166,7 @@ pub(crate) async fn accept_locked(
     lock_users(db, passenger, Some(driver)).await?;
     let locked=query(db,"SELECT to_jsonb(s) AS data FROM scheduled_rides s WHERE id=$2 AND $1 IS NOT NULL FOR UPDATE",json!({}),id).await?;
     if locked["status"] == "RESERVED" && locked["driver_id"] == json!(driver) {
-        return detail_query(db, id).await;
+        return Ok((detail_query(db, id).await?, false));
     }
     if locked["status"] != "OPEN" {
         return Err(ModuleError::Conflict("Scheduled request is no longer open"));
@@ -182,7 +182,16 @@ pub(crate) async fn accept_locked(
     }
     ensure_no_overlap(db, id, passenger, Some(driver)).await?;
     query(db,"UPDATE scheduled_rides SET driver_id=($1->>'driver')::uuid,status='RESERVED',version=version+1,updated_at=(now() AT TIME ZONE 'UTC') WHERE id=$2 RETURNING '{}'::jsonb AS data",json!({"driver":driver}),id).await?;
-    detail_query(db, id).await
+    Ok((detail_query(db, id).await?, true))
+}
+/// Reserve through the shared implementation while retaining the driver-facing booking response.
+pub(crate) async fn accept_locked(
+    db: &mut Connection<'_>,
+    driver: Uuid,
+    id: Uuid,
+    expected_version: i32,
+) -> Result<Value, ModuleError> {
+    Ok(reserve_locked(db, driver, id, expected_version).await?.0)
 }
 /// Reserve a future journey without making the driver busy on the current live network.
 pub async fn accept(
