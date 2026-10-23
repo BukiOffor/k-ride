@@ -1,8 +1,7 @@
 use super::*;
 use crate::logs::{ActivityLog, ActivityType};
-use diesel::OptionalExtension;
-use diesel::PgTextExpressionMethods;
 use diesel::prelude::*;
+use diesel::{OptionalExtension, PgTextExpressionMethods};
 use diesel_async::RunQueryDsl;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};

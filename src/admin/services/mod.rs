@@ -1,6 +1,9 @@
 //! Shared authorization, database, audit and validation services.
-use crate::admin::{dto::*, errors::*, model::Row};
-use crate::{AppState, Connection, ModuleError, auth::jwt::Claims};
+use crate::admin::dto::*;
+use crate::admin::errors::*;
+use crate::admin::model::Row;
+use crate::auth::jwt::Claims;
+use crate::{AppState, Connection, ModuleError};
 use axum::http::StatusCode;
 use diesel::sql_types::{Jsonb, Uuid as SqlUuid};
 use diesel_async::{AsyncConnection, RunQueryDsl};

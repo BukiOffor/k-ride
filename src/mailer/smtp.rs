@@ -1,9 +1,8 @@
 //! Independent asynchronous SMTP fallback; no synchronous socket calls run on Tokio worker threads.
 use super::worker::EmailJob;
-use lettre::{
-    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor, message::Mailbox,
-    transport::smtp::authentication::Credentials,
-};
+use lettre::message::Mailbox;
+use lettre::transport::smtp::authentication::Credentials;
+use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
 pub struct Smtp {
     transport: AsyncSmtpTransport<Tokio1Executor>,

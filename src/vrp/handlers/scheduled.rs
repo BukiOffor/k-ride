@@ -1,12 +1,12 @@
 //! HTTP adapters for passenger scheduled bookings and the driver request board.
-use crate::vrp::{dtos::scheduled::*, services::scheduled};
-use crate::{AppState, ModuleError, auth::jwt::Claims};
-use axum::{
-    Json, Router,
-    extract::{Path, Query, State},
-    http::StatusCode,
-    routing::{get, post},
-};
+use crate::auth::jwt::Claims;
+use crate::vrp::dtos::scheduled::*;
+use crate::vrp::services::scheduled;
+use crate::{AppState, ModuleError};
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use serde_json::Value;
 use std::sync::Arc;
 use uuid::Uuid;

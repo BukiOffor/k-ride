@@ -1,8 +1,8 @@
+use super::dto;
+use super::dto::*;
 use super::services::people::requests_restricted;
 use super::services::safety::incident_data;
-use super::services::*;
-use super::services::{applications, reports};
-use super::{dto, dto::*};
+use super::services::{applications, reports, *};
 use crate::auth::jwt::Claims;
 use axum::http::StatusCode;
 use serde_json::json;

@@ -1,13 +1,11 @@
 use super::*;
 use chrono::NaiveDateTime;
-use diesel::{
-    deserialize::{self, FromSql, FromSqlRow},
-    expression::AsExpression,
-    pg::Pg,
-    prelude::*,
-    serialize::{self, Output, ToSql},
-    sql_types::Text,
-};
+use diesel::deserialize::{self, FromSql, FromSqlRow};
+use diesel::expression::AsExpression;
+use diesel::pg::Pg;
+use diesel::prelude::*;
+use diesel::serialize::{self, Output, ToSql};
+use diesel::sql_types::Text;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::Write;

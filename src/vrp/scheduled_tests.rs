@@ -1,17 +1,16 @@
 //! Opt-in integration coverage uses only disposable PostgreSQL/Redis and a local fake email API.
-use super::{
-    dtos::{rides::*, scheduled::*},
-    scheduled_worker,
-    services::scheduled::*,
-};
-use crate::{AppState, ModuleError, auth::jwt::Claims, users::RoleType};
+use super::dtos::rides::*;
+use super::dtos::scheduled::*;
+use super::scheduled_worker;
+use super::services::scheduled::*;
+use crate::auth::jwt::Claims;
+use crate::users::RoleType;
+use crate::{AppState, ModuleError};
 use chrono::{Duration, Utc};
 use diesel_async::AsyncConnection;
 use serde_json::{Value, json};
-use std::sync::{
-    Arc,
-    atomic::{AtomicU16, AtomicUsize, Ordering},
-};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use uuid::Uuid;
 
 /// Check the booking window and bounded retry policy without external services.
@@ -162,10 +161,8 @@ async fn scheduled_workflow_and_email_failover() {
     let admin_driver = user(&s, true).await;
     let admin_booking = booking(s.clone(), admin_passenger, 24).await;
     let admin_booking_id: Uuid = serde_json::from_value(admin_booking["id"].clone()).unwrap();
-    use crate::admin::{
-        dto::{AssignScheduledDriver, ScheduledRideFilters},
-        services::scheduled as admin_scheduled,
-    };
+    use crate::admin::dto::{AssignScheduledDriver, ScheduledRideFilters};
+    use crate::admin::services::scheduled as admin_scheduled;
     assert_eq!(
         admin_scheduled::list(
             s.clone(),

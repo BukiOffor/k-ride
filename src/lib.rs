@@ -20,11 +20,9 @@ pub mod vrp;
 // ==================================================================================================================================================================
 pub use self::errors::ModuleError;
 pub use axum::Router;
+pub use axum::extract::*;
 use axum::middleware;
-pub use axum::{
-    extract::*,
-    routing::{delete, get, patch, post, put},
-};
+pub use axum::routing::{delete, get, patch, post, put};
 use dispatcher::RideDispatcher;
 pub use serde::{Deserialize, Serialize};
 use std::sync::Arc;

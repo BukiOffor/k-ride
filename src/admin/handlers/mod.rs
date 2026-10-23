@@ -1,13 +1,14 @@
 //! HTTP routing and request/response adapters for paid rides administration.
-use crate::admin::{dto, dto::*, errors::AdminError, services};
-use crate::{AppState, auth::jwt::Claims};
-use axum::{
-    Json, Router,
-    extract::{Path, Query, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    routing::{get, patch, post},
-};
+use crate::AppState;
+use crate::admin::dto::*;
+use crate::admin::errors::AdminError;
+use crate::admin::{dto, services};
+use crate::auth::jwt::Claims;
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, patch, post};
+use axum::{Json, Router};
 use serde_json::Value;
 use std::sync::Arc;
 use uuid::Uuid;

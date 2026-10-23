@@ -1,9 +1,7 @@
 //! Errors and HTTP rejection responses for admin operations.
-use axum::{
-    Json,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-};
+use axum::Json;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use serde_json::json;
 #[derive(Debug)]
 pub struct AdminError(pub StatusCode, pub &'static str, pub String);

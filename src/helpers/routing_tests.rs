@@ -1,13 +1,9 @@
 //! Local HTTP fixtures verify routing policy without calling production providers.
 use dispatcher::routing::{Router, RoutingError};
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpListener,
-};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 
 const GOOD: &str = r#"{"code":"Ok","routes":[{"distance":7234.5,"duration":650.4,"geometry":{"type":"LineString","coordinates":[[7.4246,9.0721],[7.4728,9.0647]]}}]}"#;
 const START: [f64; 2] = [7.4246, 9.0721];

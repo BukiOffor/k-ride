@@ -1,11 +1,11 @@
 //! Scheduled bookings: fare snapshots, serialized acceptance and reusable reservation locks.
-use crate::vrp::{dtos::scheduled::*, models::scheduled::ScheduledJsonRow};
-use crate::{AppState, Connection, ModuleError, auth::jwt::Claims};
+use crate::auth::jwt::Claims;
+use crate::vrp::dtos::scheduled::*;
+use crate::vrp::models::scheduled::ScheduledJsonRow;
+use crate::{AppState, Connection, ModuleError};
 use chrono::{DateTime, Utc};
-use diesel::{
-    OptionalExtension,
-    sql_types::{Jsonb, Uuid as SqlUuid},
-};
+use diesel::OptionalExtension;
+use diesel::sql_types::{Jsonb, Uuid as SqlUuid};
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use serde_json::{Value, json};
 use std::sync::Arc;

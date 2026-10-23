@@ -1,5 +1,6 @@
 use axum::extract::DefaultBodyLimit;
-use axum::http::{HeaderName, Method, header::*};
+use axum::http::header::*;
+use axum::http::{HeaderName, Method};
 use diesel_migrations::{EmbeddedMigrations, embed_migrations};
 use dispatcher::RideDispatcher;
 use k_rides::AppState;
@@ -10,9 +11,10 @@ use k_rides::users::swagger::UsersApiDoc;
 use k_rides::vrp::swagger::VrpApiDoc;
 use redis::aio::ConnectionManager;
 use std::sync::Arc;
-use tower_http::{
-    compression::CompressionLayer, cors::CorsLayer, limit::RequestBodyLimitLayer, trace::TraceLayer,
-};
+use tower_http::compression::CompressionLayer;
+use tower_http::cors::CorsLayer;
+use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 

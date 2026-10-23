@@ -2,9 +2,10 @@ use super::*;
 use crate::Message;
 use crate::auth::dto::{LoginPayload, LoginResponseDto, RefreshTokenPayload};
 use crate::logs::{ActivityLog, ActivityType};
+use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::routing::post;
-use axum::{Json, Router, extract::State};
+use axum::{Json, Router};
 use axum_extra::extract::CookieJar;
 use std::sync::Arc;
 

@@ -11,10 +11,8 @@ pub use dtos::*;
 pub use models::cars::*;
 
 // Axum re-exports for handler convenience
-pub use axum::{
-    extract::*,
-    routing::{Router, delete, get, patch, post, put},
-};
+pub use axum::extract::*;
+pub use axum::routing::{Router, delete, get, patch, post, put};
 
 // Error type used by handlers/services
 pub use crate::errors::ModuleError as ApiError;

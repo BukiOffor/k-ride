@@ -1,8 +1,7 @@
 use handlebars::Handlebars;
-use lettre::{
-    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor, message::header::ContentType,
-    transport::smtp::authentication::Credentials,
-};
+use lettre::message::header::ContentType;
+use lettre::transport::smtp::authentication::Credentials;
+use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use serde_json::Value;
 
 use super::config::Config;
