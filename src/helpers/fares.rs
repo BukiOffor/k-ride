@@ -97,6 +97,46 @@ pub fn calculate_fare_quote(
     }
 }
 
+/// Recognize the airport's full name in a selected place label. Do not match
+/// generic airport labels or nearby addresses supplied as secondary text.
+pub fn is_nnamdi_azikiwe_airport(place: &crate::vrp::dtos::rides::Place) -> bool {
+    let normalized = place
+        .name
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let padded = format!(" {normalized} ");
+    padded.contains(" nnamdi azikiwe airport ")
+        || padded.contains(" nnamdi azikiwe international airport ")
+}
+
+/// A fixed NGN 40,000 quote, expressed in kobo, for either airport endpoint.
+/// Both immediate and scheduled bookings persist this estimate unchanged.
+pub fn apply_airport_fare(
+    quote: &mut FareQuote,
+    pickup: &crate::vrp::dtos::rides::Place,
+    destination: &crate::vrp::dtos::rides::Place,
+) {
+    if !is_nnamdi_azikiwe_airport(pickup) && !is_nnamdi_azikiwe_airport(destination) {
+        return;
+    }
+    let fare = Money::new(4_000_000, "NGN");
+    quote.total = fare.clone();
+    quote.range = FareRange {
+        low: fare.clone(),
+        high: fare.clone(),
+    };
+    quote.breakdown = vec![FareLine {
+        code: "airport_fixed".into(),
+        label: "Nnamdi Azikiwe Airport fare".into(),
+        amount: fare,
+    }];
+    quote.is_estimate = false;
+    quote.waiting.per_minute = Money::new(0, "NGN");
+}
+
 /// Calculate waiting time charge:
 /// Free for the first 5 minutes (or option.free_waiting_minutes).
 /// Each additional started minute after the free window incurs option.waiting_per_minute_minor.
@@ -124,6 +164,78 @@ pub fn calculate_waiting_charge(
 mod tests {
     use super::*;
     use chrono::NaiveDate;
+
+    fn place(name: &str) -> crate::vrp::dtos::rides::Place {
+        crate::vrp::dtos::rides::Place {
+            id: None,
+            name: name.into(),
+            secondary: None,
+            point: LatLng { lat: 0.0, lng: 0.0 },
+            source: None,
+        }
+    }
+
+    #[test]
+    fn airport_names_are_normalized_and_specific() {
+        for name in [
+            "Nnamdi Azikiwe Airport",
+            "NNAMDI AZIKIWE INTERNATIONAL AIRPORT, Abuja",
+            "Nnamdi-Azikiwe  Airport (ABV)",
+        ] {
+            assert!(is_nnamdi_azikiwe_airport(&place(name)));
+        }
+        for name in [
+            "Airport",
+            "Murtala Muhammed International Airport",
+            "Nnamdi Azikiwe University",
+            "Nnamdi Azikiwe Airportway",
+        ] {
+            assert!(!is_nnamdi_azikiwe_airport(&place(name)));
+        }
+    }
+
+    #[test]
+    fn airport_fare_is_exact_in_both_directions_and_leaves_other_trips_unchanged() {
+        let original = FareQuote {
+            total: Money::new(120000, "NGN"),
+            range: FareRange {
+                low: Money::new(100000, "NGN"),
+                high: Money::new(150000, "NGN"),
+            },
+            breakdown: vec![],
+            is_estimate: true,
+            waiting: WaitingPolicy {
+                free_minutes: 5,
+                per_minute: Money::new(3000, "NGN"),
+            },
+        };
+        let airport = place("Nnamdi Azikiwe International Airport");
+        let city = place("City Centre");
+        for (pickup, destination) in [(&airport, &city), (&city, &airport), (&airport, &airport)] {
+            let mut quote = original.clone();
+            apply_airport_fare(&mut quote, pickup, destination);
+            assert_eq!(quote.total.amount_minor, 4_000_000);
+            assert_eq!(quote.total.currency, "NGN");
+            assert_eq!(quote.range.low.amount_minor, 4_000_000);
+            assert_eq!(quote.range.high.amount_minor, 4_000_000);
+            assert_eq!(
+                quote
+                    .breakdown
+                    .iter()
+                    .map(|line| line.amount.amount_minor)
+                    .sum::<i64>(),
+                4_000_000
+            );
+            assert!(!quote.is_estimate);
+            assert_eq!(quote.waiting.per_minute.amount_minor, 0);
+        }
+        let mut quote = original.clone();
+        apply_airport_fare(&mut quote, &city, &city);
+        assert_eq!(
+            serde_json::to_value(quote).unwrap(),
+            serde_json::to_value(original).unwrap()
+        );
+    }
 
     #[test]
     fn test_waiting_charge_within_free_window() {

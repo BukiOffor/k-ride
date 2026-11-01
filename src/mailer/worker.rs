@@ -62,7 +62,7 @@ pub fn start(
             let rx = receiver.clone();
             let transport = delivery.clone();
             tokio::spawn(async move {
-                let mut timer = tokio::time::interval(std::time::Duration::from_secs(5));
+                let mut timer = tokio::time::interval(std::time::Duration::from_secs(15));
                 loop {
                     tokio::select! {
                         _ = timer.tick() => {}

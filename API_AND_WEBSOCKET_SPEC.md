@@ -480,3 +480,17 @@ ride subscriptions; query/path user IDs cannot override authenticated identity.
 
 Immediate broadcast, driver reservations, fare locking, pickup-time activation and
 Resend/SMTP email delivery are documented in [docs/SCHEDULED_RIDES.md](docs/SCHEDULED_RIDES.md).
+
+## Nnamdi Azikiwe Airport fixed fare
+
+New fare estimates with either endpoint's `name` containing the words
+`Nnamdi Azikiwe Airport` or `Nnamdi Azikiwe International Airport` use a fixed
+NGN 40,000 fare (4,000,000 kobo) for every offered ride option. Matching ignores
+case, punctuation and repeated whitespace; generic airport labels and secondary
+address text do not trigger the rule. This is a place-name rule, not a geofence.
+
+The total, low/high range and single `airport_fixed` breakdown line all show the
+same amount. Waiting charges are zero for these fixed fares. Immediate bookings
+and scheduled bookings both consume the saved estimate; scheduled rescheduling
+continues to retain the booked fare. Existing quotes and bookings are unchanged;
+request a new estimate to receive the airport fare.

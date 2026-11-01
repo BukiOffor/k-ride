@@ -155,7 +155,13 @@ pub async fn estimate_fare(
         .map(|seconds| seconds.round() as i64);
 
     for opt in active_options {
-        let fare_quote = calculate_fare_quote(&opt, route.distance_meters, route.duration_seconds);
+        let mut fare_quote =
+            calculate_fare_quote(&opt, route.distance_meters, route.duration_seconds);
+        crate::helpers::fares::apply_airport_fare(
+            &mut fare_quote,
+            &payload.pickup,
+            &payload.destination,
+        );
 
         let available = nearest_pickup_eta_seconds.is_some();
         let pickup_eta_seconds = nearest_pickup_eta_seconds;
@@ -266,7 +272,7 @@ pub async fn request_ride(
     }
 
     // Fetch RideOption
-    let opt: RideOption = ride_options::table
+    let mut opt: RideOption = ride_options::table
         .filter(ride_options::id.eq(&payload.option_id))
         .first(&mut conn)
         .await
@@ -278,6 +284,16 @@ pub async fn request_ride(
         .find(|o| o.option.id == payload.option_id)
         .ok_or(ModuleError::BadRequest("Option not in original estimate"))?
         .fare;
+
+    // Preserve the quoted waiting policy for fixed airport fares through completion.
+    if selected_quote
+        .breakdown
+        .iter()
+        .any(|line| line.code == "airport_fixed")
+    {
+        opt.currency = selected_quote.total.currency.clone();
+        opt.waiting_per_minute_minor = 0;
+    }
 
     // Generate 4-digit pickup PIN
     let pin: u32 = rand::rng().random_range(1000..=9999);

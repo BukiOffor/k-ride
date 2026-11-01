@@ -7,6 +7,7 @@ pub mod helpers;
 pub mod logs;
 pub mod macros;
 pub mod mailer;
+pub mod rentals;
 pub mod schema;
 pub mod traits;
 pub mod types;

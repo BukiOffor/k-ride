@@ -486,3 +486,19 @@ diesel::table! {
         lease_until -> Nullable<Timestamp>,
     }
 }
+
+diesel::table! {
+    rental_requests (id) {
+        id -> Uuid,
+        user_id -> Uuid,
+        starts_at -> Timestamptz,
+        ends_at -> Timestamptz,
+        pickup_location -> Text,
+        notes -> Text,
+        status -> Text,
+        assigned_by -> Nullable<Uuid>,
+        assigned_at -> Nullable<Timestamptz>,
+        created_at -> Timestamptz,
+        updated_at -> Timestamptz,
+    }
+}

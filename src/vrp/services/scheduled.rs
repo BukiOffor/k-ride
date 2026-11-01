@@ -78,9 +78,14 @@ pub(crate) async fn lock_users(
 pub async fn create(s: Arc<AppState>, c: Claims, p: ScheduleRideDto) -> Result<Value, ModuleError> {
     let mut db = connection(&s).await?;
     let value=db.transaction::<Value,ModuleError,_>(|db|Box::pin(async {
-  lock_users(db,c.user_id,None).await?;passenger_allowed(db,c.user_id).await?;timezone_allowed(db,&p.timezone).await?;
-  let prior=diesel::sql_query("SELECT data || jsonb_build_object('_matches',scheduled_at=(($1->>'at')::timestamptz AT TIME ZONE 'UTC') AND timezone=$1->>'timezone' AND option_id=$1->>'option') AS data FROM scheduled_ride_view WHERE passenger_id=$2 AND estimate_id=($1->>'estimate')::uuid").bind::<Jsonb,_>(json!({"at":p.scheduled_at,"timezone":p.timezone,"option":p.option_id,"estimate":p.estimate_id})).bind::<SqlUuid,_>(c.user_id).get_result::<ScheduledJsonRow>(db).await.optional()?;
-  if let Some(mut prior)=prior {let same=prior.data.as_object_mut().unwrap().remove("_matches")==Some(json!(true));if same{return Ok(prior.data);}return Err(ModuleError::Conflict("Estimate already used by another scheduled booking"));}
+    lock_users(db,c.user_id,None).await?;
+    passenger_allowed(db,c.user_id).await?;
+    timezone_allowed(db,&p.timezone).await?;
+    let prior=diesel::sql_query("SELECT data || jsonb_build_object('_matches',scheduled_at=(($1->>'at')::timestamptz AT TIME ZONE 'UTC') AND timezone=$1->>'timezone' AND option_id=$1->>'option') AS data FROM scheduled_ride_view WHERE passenger_id=$2 AND estimate_id=($1->>'estimate')::uuid").bind::<Jsonb,_>(json!({"at":p.scheduled_at,"timezone":p.timezone,"option":p.option_id,"estimate":p.estimate_id})).bind::<SqlUuid,_>(c.user_id).get_result::<ScheduledJsonRow>(db).await.optional()?;
+    if let Some(mut prior)=prior {
+        let same=prior.data.as_object_mut().unwrap().remove("_matches")==Some(json!(true));
+        if same{return Ok(prior.data);}
+        return Err(ModuleError::Conflict("Estimate already used by another scheduled booking"));}
   validate_pickup(p.scheduled_at,Utc::now())?;
   let params=json!({"estimate":p.estimate_id,"option":p.option_id,"scheduledAt":p.scheduled_at,"timezone":p.timezone,"buffer":buffer_minutes(),"id":Uuid::now_v7()});
   let v=query(db,r#"WITH estimate AS (SELECT e.*,o.id AS option_id,to_jsonb(o) AS option_snapshot,q->'fare' AS quote FROM fare_estimates e JOIN ride_options o ON o.id=$1->>'option' CROSS JOIN LATERAL jsonb_array_elements(e.options) q WHERE e.id=($1->>'estimate')::uuid AND e.user_id=$2 AND e.expires_at>(now() AT TIME ZONE 'UTC') AND o.is_active AND NOT o.shared AND e.route->>'source'='road' AND (e.route->>'distanceMeters')::bigint>0 AND (e.route->>'durationSeconds')::bigint>0 AND q->'option'->>'id'=o.id), inserted AS (
@@ -227,7 +232,9 @@ pub async fn cancel(
     }
     let mut db = connection(&s).await?;
     let value=db.transaction::<Value,ModuleError,_>(|db|Box::pin(async {
-  let v=detail_query(db,id).await?;let passenger=serde_json::from_value(v["passengerId"].clone())?;let driver:Option<Uuid>=serde_json::from_value(v["driverId"].clone())?;
+  let v=detail_query(db,id).await?;
+  let passenger=serde_json::from_value(v["passengerId"].clone())?;
+  let driver:Option<Uuid>=serde_json::from_value(v["driverId"].clone())?;
   lock_users(db,passenger,driver).await?;
   let v=query(db,"SELECT to_jsonb(s) AS data FROM scheduled_rides s WHERE id=$2 AND $1 IS NOT NULL FOR UPDATE",json!({}),id).await?;
   if (driver_cancel&&v["driver_id"]!=json!(c.user_id))||(!driver_cancel&&v["passenger_id"]!=json!(c.user_id)){return Err(ModuleError::PermissionDenied);}

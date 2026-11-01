@@ -112,6 +112,7 @@ async fn main() {
         .merge(k_rides::bus::handlers::routes(state.clone()))
         .merge(k_rides::vrp::handlers::routes(state.clone()))
         .merge(k_rides::admin::handlers::routes(state.clone()))
+        .merge(k_rides::rentals::routes(state.clone()))
         .merge(k_rides::auth::handlers::routes(state.clone()))
         .merge(k_rides::logs::handlers::routes(state.clone()))
         .layer(CompressionLayer::new())
@@ -120,6 +121,7 @@ async fn main() {
 
     let mut openapi = UsersApiDoc::openapi();
     openapi.merge(BusApiDoc::openapi());
+    openapi.merge(k_rides::rentals::RentalApiDoc::openapi());
     openapi.merge(VrpApiDoc::openapi());
     openapi.merge(AuthApiDoc::openapi());
     openapi.merge(LogsApiDoc::openapi());
