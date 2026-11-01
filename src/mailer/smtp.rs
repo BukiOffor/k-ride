@@ -1,6 +1,6 @@
 //! Independent asynchronous SMTP fallback; no synchronous socket calls run on Tokio worker threads.
 use super::worker::EmailJob;
-use lettre::message::Mailbox;
+use lettre::message::{Mailbox, MultiPart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
@@ -37,21 +37,9 @@ impl Smtp {
             from,
         })
     }
-    /// Submit plain-text email using a stable Message-ID; remote SMTP servers may still deliver a retry twice.
+    /// Submit HTML and plain-text alternatives using a stable Message-ID; remote SMTP servers may still deliver a retry twice.
     pub async fn send(&self, job: &EmailJob) -> Result<(), String> {
-        let to: Mailbox = job
-            .recipient
-            .parse()
-            .map_err(|_| "invalid_recipient".to_owned())?;
-        let sender = self.from.email.to_string();
-        let domain = sender.split('@').nth(1).unwrap_or("localhost");
-        let email = Message::builder()
-            .from(self.from.clone())
-            .to(to)
-            .subject(&job.subject)
-            .message_id(Some(format!("<{}@{}>", job.id, domain)))
-            .body(job.body.clone())
-            .map_err(|_| "invalid_message".to_owned())?;
+        let email = Self::message(&self.from, job)?;
         match tokio::time::timeout(
             std::time::Duration::from_secs(15),
             self.transport.send(email),
@@ -62,5 +50,45 @@ impl Smtp {
             Ok(Err(_)) => Err("smtp_submission_failed".into()),
             Err(_) => Err("smtp_submission_timeout".into()),
         }
+    }
+    fn message(from: &Mailbox, job: &EmailJob) -> Result<Message, String> {
+        let to: Mailbox = job
+            .recipient
+            .parse()
+            .map_err(|_| "invalid_recipient".to_owned())?;
+        let sender = from.email.to_string();
+        let domain = sender.split('@').nth(1).unwrap_or("localhost");
+        let html = super::templates::render(&job.subject, &job.body)
+            .map_err(|_| "email_template_failed".to_owned())?;
+        Message::builder()
+            .from(from.clone())
+            .to(to)
+            .subject(&job.subject)
+            .message_id(Some(format!("<{}@{}>", job.id, domain)))
+            .multipart(MultiPart::alternative_plain_html(job.body.clone(), html))
+            .map_err(|_| "invalid_message".to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn smtp_contains_both_mime_alternatives_and_stable_message_id() {
+        let job = EmailJob {
+            id: uuid::Uuid::now_v7(),
+            recipient: "test@example.invalid".into(),
+            subject: "K-Ride password reset code".into(),
+            body: "Your K-Ride password reset code is: 001234\n\nDo not share this code.".into(),
+            transport: "smtp".into(),
+            attempts: 1,
+        };
+        let email = Smtp::message(&"K-Ride <mail@example.invalid>".parse().unwrap(), &job).unwrap();
+        let raw = String::from_utf8(email.formatted()).unwrap();
+        assert!(raw.contains("multipart/alternative"));
+        assert!(raw.contains("text/plain"));
+        assert!(raw.contains("text/html"));
+        assert!(raw.contains("001234"));
+        assert!(raw.contains(&format!("<{}@example.invalid>", job.id)));
     }
 }

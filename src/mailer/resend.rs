@@ -43,8 +43,18 @@ impl Resend {
             tokio::time::sleep_until(*next).await;
             *next = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
         }
-        let response=self.client.post(&self.url).bearer_auth(&self.key).header("Idempotency-Key",format!("scheduled-email/{}",job.id))
-   .json(&serde_json::json!({"from":self.from,"to":[job.recipient],"subject":job.subject,"text":job.body})).send().await;
+        let payload = match self.payload(job) {
+            Ok(payload) => payload,
+            Err(_) => return Submission::Rejected,
+        };
+        let response = self
+            .client
+            .post(&self.url)
+            .bearer_auth(&self.key)
+            .header("Idempotency-Key", format!("scheduled-email/{}", job.id))
+            .json(&payload)
+            .send()
+            .await;
         match response {
             Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
                 Ok(v) => v["id"]
@@ -63,6 +73,12 @@ impl Resend {
             _ => Submission::Uncertain,
         }
     }
+    fn payload(&self, job: &EmailJob) -> Result<serde_json::Value, handlebars::RenderError> {
+        let html = super::templates::render(&job.subject, &job.body)?;
+        Ok(
+            serde_json::json!({"from":self.from,"to":[job.recipient],"subject":job.subject,"text":job.body,"html":html}),
+        )
+    }
     #[cfg(test)]
     /// Construct a local test transport without reading real credentials or contacting the real API.
     pub(crate) fn test_endpoint(url: String) -> Self {
@@ -76,5 +92,30 @@ impl Resend {
             url,
             next_request: std::sync::Arc::new(tokio::sync::Mutex::new(tokio::time::Instant::now())),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn primary_payload_contains_html_and_unchanged_plain_text() {
+        let job = EmailJob {
+            id: uuid::Uuid::now_v7(),
+            recipient: "test@example.invalid".into(),
+            subject: "Account update".into(),
+            body: "Hello <Ada>".into(),
+            transport: "resend".into(),
+            attempts: 1,
+        };
+        let payload = Resend::test_endpoint("http://127.0.0.1".into())
+            .payload(&job)
+            .unwrap();
+        assert_eq!(payload["text"], job.body);
+        assert_eq!(payload["subject"], job.subject);
+        assert_eq!(payload["to"][0], job.recipient);
+        let html = payload["html"].as_str().unwrap();
+        assert!(html.contains("<!doctype html>"));
+        assert!(html.contains("Hello &lt;Ada&gt;"));
     }
 }

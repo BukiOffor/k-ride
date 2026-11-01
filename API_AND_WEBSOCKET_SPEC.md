@@ -494,3 +494,16 @@ same amount. Waiting charges are zero for these fixed fares. Immediate bookings
 and scheduled bookings both consume the saved estimate; scheduled rescheduling
 continues to retain the booked fare. Existing quotes and bookings are unchanged;
 request a new estimate to receive the airport fare.
+
+## Password recovery
+
+Public email OTP request and password-reset endpoints, client examples, expiry,
+resend rules, and error handling are documented in
+[docs/PASSWORD_RESET_API.md](docs/PASSWORD_RESET_API.md).
+
+## Email presentation
+
+Outbox notifications include a shared responsive HTML design and a plain-text
+alternative over both Resend and SMTP. Template maintenance and local previews
+are documented in [docs/EMAIL_DESIGN.md](docs/EMAIL_DESIGN.md). No client API
+changes or additional migration are required for HTML email delivery.

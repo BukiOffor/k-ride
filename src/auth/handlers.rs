@@ -18,6 +18,8 @@ pub fn routes(state: Arc<AppState>) -> Router {
 pub fn module_routes(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/login", post(login))
+        .route("/forgot-password", post(super::password_reset::forgot))
+        .route("/reset-password", post(super::password_reset::reset))
         .route("/logout", post(logout))
         .route("/refresh", post(refresh))
         .with_state(state)

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{{subject}}</title>
+  <style>
+    @media only screen and (max-width: 620px) {
+      .outer { padding: 20px 12px !important; }
+      .content { padding: 30px 24px !important; }
+      .hero { padding: 32px 24px !important; }
+      .headline { font-size: 32px !important; line-height: 38px !important; }
+      .otp { font-size: 34px !important; letter-spacing: 6px !important; }
+      .detail-label { width: 90px !important; }
+    }
+  </style>
+</head>
+<body style="margin:0;padding:0;background-color:#f2f4ef;color:#192b24;font-family:Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%;">
+  <div style="display:none;font-size:1px;line-height:1px;color:#f2f4ef;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;">{{preheader}}</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f2f4ef;">
+    <tr><td class="outer" align="center" style="padding:44px 20px;">
+      <!--[if mso]><table role="presentation" width="600" cellpadding="0" cellspacing="0"><tr><td><![endif]-->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;">
+        <tr><td style="padding:0 4px 22px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+            <td style="font-size:25px;font-weight:800;letter-spacing:-1px;color:#163b2b;">K-Ride<span style="color:#438463;">.</span></td>
+            <td align="right" style="font-size:10px;font-weight:700;letter-spacing:2px;color:#637569;">MOVE WITH CONFIDENCE</td>
+          </tr></table>
+        </td></tr>
+        <tr><td>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#ffffff;border:1px solid #dce4da;border-radius:20px;overflow:hidden;">
+            <tr><td class="hero" style="padding:38px 40px 36px;background-color:#143b2b;border-radius:19px 19px 0 0;">
+              <p style="margin:0 0 20px;color:#c4f580;font-size:11px;font-weight:700;letter-spacing:2.4px;">{{category}}</p>
+              <h1 class="headline" style="margin:0;color:#ffffff;font-size:39px;line-height:46px;letter-spacing:-1.3px;font-weight:700;">{{headline}}</h1>
+              <p style="margin:16px 0 0;color:#d0e0d6;font-size:15px;line-height:24px;">{{subtitle}}</p>
+            </td></tr>
+            <tr><td style="height:5px;line-height:5px;font-size:1px;background-color:#c4f580;">&nbsp;</td></tr>
+            <tr><td class="content" style="padding:34px 40px 38px;">
+              {{#each paragraphs}}
+              <p style="margin:0 0 18px;font-size:15px;line-height:25px;color:#40534a;overflow-wrap:anywhere;word-break:break-word;">{{this}}</p>
+              {{/each}}
+              {{#if otp}}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0 24px;background-color:#f1f7e9;border:1px solid #dbe9cd;border-radius:12px;">
+                <tr><td align="center" style="padding:23px 12px 25px;">
+                  <p style="margin:0 0 14px;color:#59734c;font-size:10px;font-weight:700;letter-spacing:2px;">YOUR ONE-TIME CODE</p>
+                  <p class="otp" style="margin:0;color:#143b2b;font-family:Consolas,'Courier New',monospace;font-size:44px;line-height:54px;letter-spacing:9px;font-weight:700;">{{otp}}</p>
+                </td></tr>
+              </table>
+              {{/if}}
+              {{#if details}}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:6px 0 24px;background-color:#f6f8f4;border:1px solid #e2e8dc;border-radius:12px;table-layout:fixed;">
+                <tr><td colspan="2" style="padding:20px 20px 8px;color:#59734c;font-size:10px;font-weight:700;letter-spacing:2px;">YOUR TRIP AT A GLANCE</td></tr>
+                {{#each details}}
+                <tr>
+                  <td class="detail-label" width="110" valign="top" style="width:110px;padding:12px 8px 12px 20px;font-size:12px;line-height:21px;color:#68786d;">{{label}}</td>
+                  <td valign="top" style="padding:12px 20px 12px 0;font-size:13px;line-height:21px;font-weight:600;color:#193d2c;overflow-wrap:anywhere;word-break:break-word;">{{value}}</td>
+                </tr>
+                {{/each}}
+                <tr><td colspan="2" style="height:8px;line-height:8px;font-size:1px;">&nbsp;</td></tr>
+              </table>
+              {{/if}}
+              {{#each after}}
+              <p style="margin:0 0 16px;font-size:13px;line-height:23px;color:#65766b;overflow-wrap:anywhere;word-break:break-word;">{{this}}</p>
+              {{/each}}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:26px;border-top:1px solid #e7ece3;">
+                <tr><td style="padding-top:20px;font-size:12px;line-height:21px;color:#708174;">{{footer_note}}</td></tr>
+              </table>
+            </td></tr>
+          </table>
+        </td></tr>
+        <tr><td align="center" style="padding:24px 20px 0;color:#7b897e;font-size:11px;line-height:19px;">
+          <span style="font-weight:700;color:#526a59;">K-Ride</span> &nbsp;&middot;&nbsp; A better way to get there.<br>
+          This is an automated service message.
+        </td></tr>
+      </table>
+      <!--[if mso]></td></tr></table><![endif]-->
+    </td></tr>
+  </table>
+</body>
+</html>
