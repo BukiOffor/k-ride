@@ -319,10 +319,9 @@ pub async fn assign(
     Err(ModuleError::Conflict("Hire has already started"))
 }
 
-
+#[utoipa::path(get, path="/rentals/pricing", tag="Rentals", security(("bearerAuth"=[]),("cookieAuth"=[])), responses((status=200,body=Value),(status=403,description="Admin required")))]
 pub async fn pricing(
     State(_s): State<Arc<AppState>>,
-    Json(_p): Json<RentalInput>,
 ) -> Result<Json<Value>, ModuleError> {
     Ok(Json(get_pricing()))
 }
