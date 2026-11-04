@@ -502,5 +502,6 @@ diesel::table! {
         updated_at -> Timestamptz,
         price -> Nullable<Int8>,
         car_type -> Nullable<Text>,
+        driver_id -> Nullable<Uuid>,
     }
 }

@@ -33,6 +33,7 @@ pub struct RentalRequest {
     pub updated_at: DateTime<Utc>,
     pub price: Option<i64>,
     pub car_type: Option<CarType>,
+    pub driver_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -45,6 +46,13 @@ pub struct RentalInput {
     #[serde(default)]
     pub notes: String,
 }
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AssignRentalInput {
+    pub driver_id: Uuid,
+}
+
 impl RentalInput {
     fn validate(&self, now: DateTime<Utc>) -> Result<(), ModuleError> {
         if self.starts_at <= now {
@@ -103,6 +111,7 @@ pub async fn create(
         CarType::SUV => "suv",
         CarType::Saloon => "saloon",
     };
+    let days = p.ends_at.signed_duration_since(p.starts_at).num_days();
     let rental_price = get_pricing()
         .get("cars")
         .unwrap()
@@ -113,7 +122,8 @@ pub async fn create(
         .as_str()
         .unwrap()
         .parse::<i64>()
-        .unwrap();
+        .unwrap()
+        * days;
     let row = diesel::insert_into(rental_requests::table)
         .values((
             id.eq(Uuid::now_v7()),
@@ -278,6 +288,7 @@ pub async fn assign(
     State(s): State<Arc<AppState>>,
     c: Claims,
     Path(key): Path<Uuid>,
+    Json(p): Json<AssignRentalInput>,
 ) -> Result<Json<RentalRequest>, ModuleError> {
     admin(&c)?;
     let mut conn = s.pool.get().await?;
@@ -286,7 +297,8 @@ pub async fn assign(
         rental_requests::table
             .filter(id.eq(key))
             .filter(status.eq("pending"))
-            .filter(starts_at.gt(now)),
+            .filter(starts_at.gt(now))
+            .filter(driver_id.eq(p.driver_id)),
     )
     .set((
         status.eq("assigned"),
