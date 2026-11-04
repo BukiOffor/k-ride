@@ -1,5 +1,6 @@
 //! Rental requests fulfilled offline by administrators.
 use crate::schema::rental_requests::{self, dsl::*};
+use crate::vrp::CarType;
 use crate::{AppState, ModuleError, auth::jwt::Claims, users::RoleType};
 use axum::{
     Json, Router,
@@ -11,6 +12,7 @@ use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -29,6 +31,8 @@ pub struct RentalRequest {
     pub assigned_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub price: Option<i64>,
+    pub car_type: Option<CarType>,
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -37,6 +41,7 @@ pub struct RentalInput {
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
     pub pickup_location: String,
+    pub car_type: CarType,
     #[serde(default)]
     pub notes: String,
 }
@@ -81,6 +86,7 @@ pub fn routes(s: Arc<AppState>) -> Router {
         .route("/admin/rentals", get(admin_list))
         .route("/admin/rentals/{id}", get(admin_detail))
         .route("/admin/rentals/{id}/assign", post(assign))
+        .route("/rental/pricing", get(pricing))
         .with_state(s)
 }
 
@@ -92,6 +98,22 @@ pub async fn create(
 ) -> Result<(StatusCode, Json<RentalRequest>), ModuleError> {
     p.validate(Utc::now())?;
     let mut conn = s.pool.get().await?;
+    let car_type_str = match p.car_type {
+        CarType::Van => "van",
+        CarType::SUV => "suv",
+        CarType::Saloon => "saloon",
+    };
+    let rental_price = get_pricing()
+        .get("cars")
+        .unwrap()
+        .get(car_type_str)
+        .unwrap()
+        .get("price")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .parse::<i64>()
+        .unwrap();
     let row = diesel::insert_into(rental_requests::table)
         .values((
             id.eq(Uuid::now_v7()),
@@ -100,6 +122,8 @@ pub async fn create(
             ends_at.eq(p.ends_at),
             pickup_location.eq(p.pickup_location.trim()),
             notes.eq(p.notes),
+            price.eq(rental_price),
+            car_type.eq(p.car_type),
         ))
         .get_result(&mut conn)
         .await?;
@@ -282,6 +306,34 @@ pub async fn assign(
     }
     Err(ModuleError::Conflict("Hire has already started"))
 }
+
+
+pub async fn pricing(
+    State(_s): State<Arc<AppState>>,
+    Json(_p): Json<RentalInput>,
+) -> Result<Json<Value>, ModuleError> {
+    Ok(Json(get_pricing()))
+}
+
+fn get_pricing() -> Value {
+    json!({
+        "cars": {
+            "van": {
+                "price": "100000",
+                "currency": "NGN"
+            },
+            "suv": {
+                "price": "200000",
+                "currency": "NGN"
+            },
+            "saloon": {
+                "price": "300000",
+                "currency": "NGN"
+            }
+        }
+    })
+}
+
 #[derive(utoipa::OpenApi)]
 #[openapi(
     paths(create, list, detail, update, remove, admin_list, admin_detail, assign),
@@ -299,6 +351,7 @@ mod tests {
             starts_at: now + chrono::Duration::hours(1),
             ends_at: now + chrono::Duration::hours(25),
             pickup_location: "Airport".into(),
+            car_type: CarType::Saloon,
             notes: String::new(),
         };
         assert!(p.validate(now).is_ok());

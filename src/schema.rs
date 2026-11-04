@@ -500,5 +500,7 @@ diesel::table! {
         assigned_at -> Nullable<Timestamptz>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
+        price -> Nullable<Int8>,
+        car_type -> Nullable<Text>,
     }
 }
