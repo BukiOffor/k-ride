@@ -297,11 +297,11 @@ pub async fn assign(
         rental_requests::table
             .filter(id.eq(key))
             .filter(status.eq("pending"))
-            .filter(starts_at.gt(now))
-            .filter(driver_id.eq(p.driver_id)),
+            .filter(starts_at.gt(now)),
     )
     .set((
         status.eq("assigned"),
+        driver_id.eq(p.driver_id),
         assigned_by.eq(c.user_id),
         assigned_at.eq(now),
         updated_at.eq(now),
