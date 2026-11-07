@@ -50,7 +50,8 @@ pub fn calculate_fare_quote(
     let distance_fare = (km * option.per_km_minor as f64).round() as i64;
     let time_fare = (minutes * option.per_minute_minor as f64).round() as i64;
 
-    let subtotal = option.base_fare_minor + distance_fare + time_fare + option.booking_fee_minor;
+    let base_fare = option.base_fare_minor + 300_000;
+    let subtotal = base_fare + distance_fare + time_fare + option.booking_fee_minor;
     let mut total = subtotal.max(option.minimum_fare_minor);
 
     // Apply rounding if configured (e.g., 5000 minor units = 50 NGN)
@@ -68,7 +69,7 @@ pub fn calculate_fare_quote(
         FareLine {
             code: "base".into(),
             label: "Base Fare".into(),
-            amount: Money::new(option.base_fare_minor, &option.currency),
+            amount: Money::new(base_fare, &option.currency),
         },
         FareLine {
             code: "distance".into(),
