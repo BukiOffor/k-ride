@@ -1,0 +1,721 @@
+//! Realtime WebSocket layer for Paid Rides and Driver Dispatch.
+//!
+//! Provides the in-memory DashMap registry mapping:
+//! - Driver ID -> Internal Message Mailbox (tokio mpsc sender)
+//! - Ride ID -> Broadcast Channel (for passenger & assigned driver)
+//!
+//! Implements the 4-Phase Lifecycle:
+//! 1. Driver Goes Online (The Handshake):
+//!    - WebSocket connection upgraded at `/rides/ws`.
+//!    - Connection split into Incoming Listener (GPS fixes) and Outgoing Speaker (push alerts).
+//!    - Driver's mailbox (mpsc::Sender) registered in-memory in DashMap.
+//! 2. The 4-Second Location Heartbeat:
+//!    - Driver sends GPS fix every 4 seconds.
+//!    - Ingested directly into H3 spatial index in Redis via `dispatcher.ingest_driver_location` (IN MEMORY, NOT DB).
+//!    - Refreshes 15-second dead-man's switch TTL.
+//! 3. Rider Requests a Trip (Match & Dispatch):
+//!    - Matches closest drivers from Redis H3 index.
+//!    - Looks up driver ID in DashMap to grab their internal mailbox.
+//!    - Pushes `driver.request.received` frame down open WebSocket.
+//! 4. Driver Goes Offline (Cleanup):
+//!    - Clean disconnect or sudden drop (TTL expiry):
+//!    - Mailbox removed from DashMap; driver removed from Redis spatial map.
+
+use crate::AppState;
+use axum::Router;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Path, Query, State};
+use axum::response::IntoResponse;
+use axum::routing::get;
+use dashmap::DashMap;
+use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::{broadcast, mpsc};
+use uuid::Uuid;
+
+/// Internal message pushed down to a connected client's WebSocket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum OutgoingWsMessage {
+    /// Server frame: { "type": "event", "event": ... }
+    #[serde(rename = "event")]
+    Event { event: WsEventFrame },
+    /// Heartbeat response
+    #[serde(rename = "pong")]
+    Pong,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WsEventFrame {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ride_id: Option<Uuid>,
+    pub seq: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ride_version: Option<i32>,
+    pub occurred_at: String,
+    pub payload: serde_json::Value,
+}
+
+/// Incoming client frames over WebSocket.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type")]
+pub enum IncomingWsFrame {
+    #[serde(rename = "subscribe")]
+    Subscribe { channel: String },
+    #[serde(rename = "unsubscribe")]
+    Unsubscribe { channel: String },
+    #[serde(rename = "location")]
+    Location {
+        location: crate::vrp::dtos::rides::LiveLocation,
+    },
+    #[serde(rename = "ping")]
+    Ping,
+}
+
+/// In-memory DashMap registry for live driver network sockets and ride broadcast channels.
+#[derive(Clone, Default)]
+pub struct WsRegistry {
+    pub admin_channels: Arc<DashMap<String, broadcast::Sender<WsEventFrame>>>,
+    /// Driver ID -> Internal Message Mailbox (Outgoing Speaker sender)
+    pub drivers: Arc<DashMap<Uuid, mpsc::Sender<OutgoingWsMessage>>>,
+    /// Ride ID -> Broadcast Channel for active ride updates
+    pub ride_channels: Arc<DashMap<Uuid, broadcast::Sender<WsEventFrame>>>,
+    /// Driver ID -> Online availability in RAM
+    pub driver_online: Arc<DashMap<Uuid, bool>>,
+    /// Driver ID -> Current Active Ride ID in RAM
+    pub driver_active_rides: Arc<DashMap<Uuid, Uuid>>,
+    /// Driver ID -> Last activity timestamp in RAM
+    pub driver_last_seen: Arc<DashMap<Uuid, std::time::Instant>>,
+}
+
+impl WsRegistry {
+    pub fn new() -> Self {
+        Self {
+            admin_channels: Arc::new(DashMap::new()),
+            drivers: Arc::new(DashMap::new()),
+            ride_channels: Arc::new(DashMap::new()),
+            driver_online: Arc::new(DashMap::new()),
+            driver_active_rides: Arc::new(DashMap::new()),
+            driver_last_seen: Arc::new(DashMap::new()),
+        }
+    }
+
+    /// Phase 1: Registers a driver's outgoing mailbox upon WebSocket handshake.
+    pub fn register_driver(&self, driver_id: Uuid, tx: mpsc::Sender<OutgoingWsMessage>) {
+        self.drivers.insert(driver_id, tx);
+        self.driver_last_seen
+            .insert(driver_id, std::time::Instant::now());
+        tracing::info!("Registered driver in DashMap mailbox: {}", driver_id);
+    }
+
+    /// Refreshes the last-seen activity timestamp for a driver.
+    pub fn touch_driver(&self, driver_id: &Uuid) {
+        self.driver_last_seen
+            .insert(*driver_id, std::time::Instant::now());
+    }
+
+    /// Sets driver online availability in memory.
+    pub fn set_driver_online(&self, driver_id: Uuid, online: bool) {
+        if online {
+            self.driver_online.insert(driver_id, true);
+        } else {
+            self.driver_online.remove(&driver_id);
+        }
+    }
+
+    /// Checks if driver is marked online in memory.
+    pub fn is_driver_online(&self, driver_id: &Uuid) -> bool {
+        self.driver_online
+            .get(driver_id)
+            .map(|v| *v)
+            .unwrap_or(false)
+    }
+
+    /// Sets or clears the active ride for a driver in memory.
+    pub fn set_driver_active_ride(&self, driver_id: Uuid, ride_id: Option<Uuid>) {
+        if let Some(id) = ride_id {
+            self.driver_active_rides.insert(driver_id, id);
+        } else {
+            self.driver_active_rides.remove(&driver_id);
+        }
+    }
+
+    /// Returns the driver's current active ride ID if in memory.
+    pub fn get_driver_active_ride(&self, driver_id: &Uuid) -> Option<Uuid> {
+        self.driver_active_rides.get(driver_id).map(|v| *v)
+    }
+
+    /// Phase 4: Unregisters a driver's mailbox from RAM when disconnecting.
+    pub fn unregister_driver(&self, driver_id: &Uuid) {
+        if self.drivers.remove(driver_id).is_some() {
+            tracing::info!("Unregistered driver from DashMap: {}", driver_id);
+        }
+        self.driver_last_seen.remove(driver_id);
+    }
+
+    /// Spawns a background worker that periodically inspects active WebSocket connections
+    /// and cleans up stale/dead connections where no heartbeat was received within `stale_threshold`.
+    pub fn start_stale_connection_cleaner(
+        self: &Arc<Self>,
+        check_interval: std::time::Duration,
+        stale_threshold: std::time::Duration,
+    ) -> tokio::task::JoinHandle<()> {
+        let registry = self.clone();
+        tokio::spawn(async move {
+            tracing::info!(
+                "Started WebSocket stale connection cleaner worker (interval: {:?}, timeout: {:?})",
+                check_interval,
+                stale_threshold
+            );
+            let mut interval = tokio::time::interval(check_interval);
+            loop {
+                interval.tick().await;
+                registry.cleanup_stale_connections(stale_threshold);
+            }
+        })
+    }
+
+    /// Cleans up any registered driver connections that haven't sent a ping or message
+    /// within `stale_threshold`, or whose outgoing channel has closed.
+    pub fn cleanup_stale_connections(&self, stale_threshold: std::time::Duration) {
+        let now = std::time::Instant::now();
+        let mut stale_drivers = Vec::new();
+
+        // 1. Scan drivers for dead/closed channels or inactive heartbeats
+        for entry in self.drivers.iter() {
+            let driver_id = *entry.key();
+            let sender = entry.value();
+
+            if sender.is_closed() {
+                stale_drivers.push((driver_id, "outgoing_channel_closed"));
+                continue;
+            }
+
+            if let Some(last_seen) = self.driver_last_seen.get(&driver_id) {
+                if now.duration_since(*last_seen) > stale_threshold {
+                    stale_drivers.push((driver_id, "heartbeat_timeout"));
+                }
+            }
+        }
+
+        for (driver_id, reason) in stale_drivers {
+            tracing::warn!(
+                "Stale connection cleaner: removing dead driver connection {} (reason: {})",
+                driver_id,
+                reason
+            );
+            self.unregister_driver(&driver_id);
+        }
+
+        // 2. Clean up abandoned ride broadcast channels with 0 active subscribers
+        self.ride_channels
+            .retain(|_ride_id, bcast| bcast.receiver_count() > 0);
+        // Retire unused booking channels, preserving senders currently being subscribed to.
+        self.admin_channels.retain(|name, channel| {
+            !name.starts_with("scheduled:")
+                || channel.receiver_count() > 0
+                || channel.strong_count() > 1
+        });
+    }
+
+    /// Checks if a driver currently has an active WebSocket connection in RAM.
+    pub fn is_driver_connected(&self, driver_id: &Uuid) -> bool {
+        self.drivers.contains_key(driver_id)
+    }
+
+    /// Phase 3 (Step B & C): Find driver in DashMap and push the offer down their WebSocket.
+    pub async fn send_to_driver(
+        &self,
+        driver_id: &Uuid,
+        msg: OutgoingWsMessage,
+    ) -> Result<(), &'static str> {
+        if let Some(sender) = self.drivers.get(driver_id) {
+            sender
+                .send(msg)
+                .await
+                .map_err(|_| "Failed to send to driver mailbox")?;
+            Ok(())
+        } else {
+            Err("Driver not connected in memory")
+        }
+    }
+
+    pub fn admin_channel(&self, channel: &str) -> broadcast::Sender<WsEventFrame> {
+        self.admin_channels
+            .entry(channel.to_owned())
+            .or_insert_with(|| broadcast::channel(256).0)
+            .clone()
+    }
+
+    pub fn broadcast_admin_event(
+        &self,
+        channel: &str,
+        event_type: &str,
+        payload: serde_json::Value,
+    ) {
+        let mut payload = if payload.is_object() {
+            payload
+        } else {
+            serde_json::json!({"data":payload})
+        };
+        payload["type"] = serde_json::json!(event_type);
+        let event = WsEventFrame {
+            id: format!("evt_{}", Uuid::now_v7()),
+            ride_id: None,
+            seq: 0,
+            ride_version: None,
+            occurred_at: chrono::Utc::now().to_rfc3339(),
+            payload,
+        };
+        let _ = self.admin_channel(channel).send(event);
+    }
+
+    /// Pushes a ride update event to all subscribers of `ride:<ride_id>`.
+    pub fn broadcast_ride_event(&self, ride_id: Uuid, event: WsEventFrame) {
+        if event.payload.get("type").and_then(|v| v.as_str())
+            != Some("ride.driver.location_updated")
+        {
+            self.broadcast_admin_event("admin:rides", "admin.ride.changed", serde_json::json!({"rideId":ride_id,"status":event.payload.get("ride").and_then(|r| r.get("status")),"sos":event.payload.get("ride").and_then(|r| r.get("sos")),"rideVersion":event.ride_version}));
+        }
+        if let Some(bcast) = self.ride_channels.get(&ride_id) {
+            let _ = bcast.send(event);
+        }
+    }
+
+    /// Gets or creates a broadcast channel for a ride.
+    pub fn get_or_create_ride_channel(&self, ride_id: Uuid) -> broadcast::Sender<WsEventFrame> {
+        self.ride_channels
+            .entry(ride_id)
+            .or_insert_with(|| {
+                let (tx, _) = broadcast::channel(100);
+                tx
+            })
+            .clone()
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct WsQuery {
+    pub driver_id: Option<Uuid>,
+    pub user_id: Option<Uuid>,
+}
+
+/// WebSocket route definitions:
+/// - GET /rides/ws
+/// - GET /rides/ws/{driver_id}
+pub fn routes(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/ws", get(ws_handler))
+        .route("/ws/{driver_id}", get(ws_handler_with_path))
+        .with_state(state)
+}
+
+/// Authenticate browser cookies or Bearer tokens; identity hints may never override claims.
+pub async fn ws_handler(
+    State(state): State<Arc<AppState>>,
+    claims: crate::auth::jwt::Claims,
+    Query(query): Query<WsQuery>,
+    ws: WebSocketUpgrade,
+) -> Result<axum::response::Response, crate::ModuleError> {
+    if query.driver_id.is_some_and(|id| id != claims.user_id)
+        || query.user_id.is_some_and(|id| id != claims.user_id)
+    {
+        return Err(crate::ModuleError::PermissionDenied);
+    }
+    let is_driver = matches!(claims.role, crate::users::RoleType::Driver);
+    if query.driver_id.is_some() && !is_driver {
+        return Err(crate::ModuleError::PermissionDenied);
+    }
+    let is_admin = matches!(
+        claims.role,
+        crate::users::RoleType::Admin | crate::users::RoleType::Root
+    );
+    Ok(ws
+        .on_upgrade(move |socket| handle_socket(state, claims.user_id, is_driver, is_admin, socket))
+        .into_response())
+}
+
+pub async fn ws_handler_with_path(
+    State(state): State<Arc<AppState>>,
+    claims: crate::auth::jwt::Claims,
+    Path(driver_id): Path<Uuid>,
+    ws: WebSocketUpgrade,
+) -> Result<axum::response::Response, crate::ModuleError> {
+    if driver_id != claims.user_id || !matches!(claims.role, crate::users::RoleType::Driver) {
+        return Err(crate::ModuleError::PermissionDenied);
+    }
+    Ok(ws
+        .on_upgrade(move |socket| handle_socket(state, claims.user_id, true, false, socket))
+        .into_response())
+}
+
+async fn may_subscribe(state: &AppState, user_id: Uuid, ride_id: Uuid, is_admin: bool) -> bool {
+    if is_admin {
+        return true;
+    }
+    use crate::schema::rides::dsl::*;
+    use diesel::prelude::*;
+    use diesel_async::RunQueryDsl;
+    let Ok(mut db) = state.pool.get().await else {
+        return false;
+    };
+    rides
+        .filter(id.eq(ride_id))
+        .filter(passenger_id.eq(user_id).or(driver_id.eq(user_id)))
+        .select((driver_id, status))
+        .first::<(Option<Uuid>, String)>(&mut db)
+        .await
+        .map(|(assigned, ride_status)| {
+            if assigned == Some(user_id)
+                && !matches!(ride_status.as_str(), "COMPLETED" | "CANCELLED")
+            {
+                state
+                    .ws_registry
+                    .set_driver_active_ride(user_id, Some(ride_id));
+            }
+            true
+        })
+        .unwrap_or(false)
+}
+
+/// Authorize a future-booking channel using current assignment; former drivers lose access after release.
+async fn may_subscribe_scheduled(
+    state: &AppState,
+    user: Uuid,
+    booking: Uuid,
+    is_admin: bool,
+) -> bool {
+    if is_admin {
+        return true;
+    }
+    use diesel::sql_types::{Bool, Uuid as SqlUuid};
+    use diesel_async::RunQueryDsl;
+    #[derive(diesel::QueryableByName)]
+    struct Allowed {
+        #[diesel(sql_type=Bool)]
+        allowed: bool,
+    }
+    let Ok(mut db) = state.pool.get().await else {
+        return false;
+    };
+    diesel::sql_query("SELECT EXISTS(SELECT 1 FROM scheduled_rides WHERE id=$1 AND (passenger_id=$2 OR driver_id=$2)) AS allowed")
+      .bind::<SqlUuid,_>(booking).bind::<SqlUuid,_>(user).get_result::<Allowed>(&mut db).await.map(|r|r.allowed).unwrap_or(false)
+}
+
+/// Handles the upgraded WebSocket connection across the 4 phases.
+async fn handle_socket(
+    state: Arc<AppState>,
+    user_id: Uuid,
+    is_driver: bool,
+    is_admin: bool,
+    socket: WebSocket,
+) {
+    // Phase 1: Splitting the line into Incoming Listener and Outgoing Speaker
+    let (mut ws_sender, mut ws_receiver) = socket.split();
+
+    // Create internal mailbox (tokio channel)
+    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingWsMessage>(64);
+
+    // If user is a driver, register their mailbox in DashMap
+    if is_driver {
+        state
+            .ws_registry
+            .register_driver(user_id, outgoing_tx.clone());
+    }
+
+    // Task: Outgoing Speaker (sends messages down to the client's WebSocket & periodic keepalive pings)
+    let send_task = tokio::spawn(async move {
+        let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(20));
+        ping_interval.tick().await; // consume immediate initial tick
+
+        loop {
+            tokio::select! {
+                Some(msg) = outgoing_rx.recv() => {
+                    if let Ok(json_str) = serde_json::to_string(&msg) {
+                        if ws_sender.send(Message::Text(json_str.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                _ = ping_interval.tick() => {
+                    // Send protocol-level ping to detect broken pipes and prevent NAT timeouts
+                    if ws_sender.send(Message::Ping(vec![].into())).await.is_err() {
+                        tracing::debug!("WebSocket keep-alive ping failed (broken pipe), terminating sender task");
+                        break;
+                    }
+                }
+                else => break,
+            }
+        }
+    });
+
+    // Task: Incoming Listener (receives 4-second GPS location heartbeats & pings with inactivity timeout)
+    let app_state_clone = state.clone();
+    let mut dispatcher = (*state.dispatcher).clone();
+    let mut ride_subscriptions: std::collections::HashMap<Uuid, tokio::task::JoinHandle<()>> =
+        std::collections::HashMap::new();
+
+    let mut admin_subscriptions: std::collections::HashMap<String, tokio::task::JoinHandle<()>> =
+        std::collections::HashMap::new();
+    const INCOMING_HEARTBEAT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+
+    loop {
+        let next_msg = tokio::time::timeout(INCOMING_HEARTBEAT_TIMEOUT, ws_receiver.next()).await;
+        match next_msg {
+            Ok(Some(Ok(msg))) => {
+                if is_driver {
+                    app_state_clone.ws_registry.touch_driver(&user_id);
+                }
+                match msg {
+                    Message::Text(text) => {
+                        if let Ok(frame) = serde_json::from_str::<IncomingWsFrame>(&text) {
+                            match frame {
+                                IncomingWsFrame::Ping => {
+                                    let _ = outgoing_tx.send(OutgoingWsMessage::Pong).await;
+                                }
+                                IncomingWsFrame::Location { location } => {
+                                    // Phase 2: 4-Second Location Heartbeat (IN-MEMORY & REDIS ONLY, NO DB QUERIES)
+                                    if is_driver {
+                                        // Only ingest into Redis spatial matching pool if driver is currently marked ONLINE in RAM
+                                        if app_state_clone.ws_registry.is_driver_online(&user_id) {
+                                            let driver_state = dispatcher::DriverState {
+                                                driver_id: user_id.to_string(),
+                                                lat: location.point.lat,
+                                                lng: location.point.lng,
+                                                available_seats: 4,
+                                            };
+
+                                            let _ = dispatcher
+                                                .ingest_driver_location(&driver_state)
+                                                .await;
+                                        }
+
+                                        // Broadcast location update if driver has an active ride in RAM
+                                        if let Some(ride_id) = app_state_clone
+                                            .ws_registry
+                                            .get_driver_active_ride(&user_id)
+                                        {
+                                            let loc_event = WsEventFrame {
+                                                id: format!("evt_{}", Uuid::now_v7()),
+                                                ride_id: Some(ride_id),
+                                                seq: 1,
+                                                ride_version: None,
+                                                occurred_at: chrono::Utc::now().to_rfc3339(),
+                                                payload: serde_json::json!({
+                                                    "type": "ride.driver.location_updated",
+                                                    "location": location,
+                                                }),
+                                            };
+                                            app_state_clone
+                                                .ws_registry
+                                                .broadcast_ride_event(ride_id, loc_event);
+                                        }
+                                    }
+                                }
+                                IncomingWsFrame::Subscribe { channel } => {
+                                    tracing::debug!("User {} subscribed to {}", user_id, channel);
+                                    let scheduled_id = channel
+                                        .strip_prefix("scheduled:")
+                                        .and_then(|x| x.parse::<Uuid>().ok());
+                                    let scheduled_allowed = if let Some(id) = scheduled_id {
+                                        may_subscribe_scheduled(
+                                            &app_state_clone,
+                                            user_id,
+                                            id,
+                                            is_admin,
+                                        )
+                                        .await
+                                    } else {
+                                        false
+                                    };
+                                    if ((is_admin
+                                        && matches!(
+                                            channel.as_str(),
+                                            "admin:rides" | "admin:safety"
+                                        ))
+                                        || scheduled_allowed)
+                                        && !admin_subscriptions.contains_key(&channel)
+                                    {
+                                        let mut rx = app_state_clone
+                                            .ws_registry
+                                            .admin_channel(&channel)
+                                            .subscribe();
+                                        let tx = outgoing_tx.clone();
+                                        let subscription_state = app_state_clone.clone();
+                                        admin_subscriptions.insert(
+                                            channel.clone(),
+                                            tokio::spawn(async move {
+                                                loop {
+                                                    match rx.recv().await {
+                                                        Ok(event) => {
+                                                            if let Some(id)=scheduled_id {
+                                                                if !may_subscribe_scheduled(&subscription_state,user_id,id,is_admin).await {break;}
+                                                            }
+                                                            if tx
+                                                                .send(OutgoingWsMessage::Event {
+                                                                    event,
+                                                                })
+                                                                .await
+                                                                .is_err()
+                                                            {
+                                                                break;
+                                                            }
+                                                        }
+                                                        Err(
+                                                            broadcast::error::RecvError::Lagged(_),
+                                                        ) => {
+                                                            // A client must refetch after a gap; never silently lose a safety update.
+                                                            let event = WsEventFrame {
+                                                                id: format!("evt_{}",Uuid::now_v7()),
+                                                                ride_id: None,
+                                                                seq: 0,
+                                                                ride_version: None,
+                                                                occurred_at: chrono::Utc::now()
+                                                                    .to_rfc3339(),
+                                                                payload: serde_json::json!({"type":if scheduled_id.is_some(){"scheduled.resync_required"}else{"admin.resync_required"}}),
+                                                            };
+                                                            if tx
+                                                                .send(OutgoingWsMessage::Event {
+                                                                    event,
+                                                                })
+                                                                .await
+                                                                .is_err()
+                                                            {
+                                                                break;
+                                                            }
+                                                        }
+                                                        Err(_) => break,
+                                                    }
+                                                }
+                                            }),
+                                        );
+                                    }
+                                    if channel.starts_with("ride:") {
+                                        if let Ok(ride_id) = Uuid::parse_str(&channel[5..]) {
+                                            if !may_subscribe(
+                                                &app_state_clone,
+                                                user_id,
+                                                ride_id,
+                                                is_admin,
+                                            )
+                                            .await
+                                            {
+                                                continue;
+                                            }
+                                            if !ride_subscriptions.contains_key(&ride_id) {
+                                                let mut rx = app_state_clone
+                                                    .ws_registry
+                                                    .get_or_create_ride_channel(ride_id)
+                                                    .subscribe();
+                                                let tx = outgoing_tx.clone();
+                                                let sub_handle = tokio::spawn(async move {
+                                                    while let Ok(event) = rx.recv().await {
+                                                        if tx
+                                                            .send(OutgoingWsMessage::Event {
+                                                                event,
+                                                            })
+                                                            .await
+                                                            .is_err()
+                                                        {
+                                                            break;
+                                                        }
+                                                    }
+                                                });
+                                                ride_subscriptions.insert(ride_id, sub_handle);
+                                            }
+                                        }
+                                    }
+                                }
+                                IncomingWsFrame::Unsubscribe { channel } => {
+                                    tracing::debug!(
+                                        "User {} unsubscribed from {}",
+                                        user_id,
+                                        channel
+                                    );
+                                    if let Some(handle) = admin_subscriptions.remove(&channel) {
+                                        handle.abort();
+                                    }
+                                    if channel.starts_with("ride:") {
+                                        if let Ok(ride_id) = Uuid::parse_str(&channel[5..]) {
+                                            if let Some(handle) =
+                                                ride_subscriptions.remove(&ride_id)
+                                            {
+                                                handle.abort();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Message::Ping(_) => {
+                        // Axum's underlying tungstenite socket automatically answers protocol Ping with Pong
+                    }
+                    Message::Pong(_) => {
+                        // Protocol Pong received, socket is active
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
+                }
+            }
+            Ok(Some(Err(e))) => {
+                tracing::debug!("WebSocket error for user {}: {}", user_id, e);
+                break;
+            }
+            Ok(None) => break,
+            Err(_) => {
+                tracing::warn!(
+                    "WebSocket connection for user {} timed out (no heartbeat for {:?}), terminating stale connection",
+                    user_id,
+                    INCOMING_HEARTBEAT_TIMEOUT
+                );
+                break;
+            }
+        }
+    }
+
+    for (_, handle) in admin_subscriptions {
+        handle.abort();
+    }
+    for (_, handle) in ride_subscriptions {
+        handle.abort();
+    }
+
+    // Phase 4: Cleanup on disconnect
+    if is_driver {
+        // Unregister mailbox from RAM (DashMap)
+        app_state_clone.ws_registry.unregister_driver(&user_id);
+    }
+
+    send_task.abort();
+}
+
+#[cfg(test)]
+mod admin_tests {
+    use super::*;
+    #[test]
+    fn admin_events_use_unique_ids_and_compact_payloads() {
+        let registry = WsRegistry::new();
+        let mut network = registry.admin_channel("admin:rides").subscribe();
+        let ride_id = Uuid::now_v7();
+        let frame = |kind: &str| WsEventFrame {
+            id: "source".into(),
+            ride_id: Some(ride_id),
+            seq: 1,
+            ride_version: Some(2),
+            occurred_at: "now".into(),
+            payload: serde_json::json!({"type":kind,"ride":{"status":"IN_PROGRESS","passenger":{"phone":"private"}}}),
+        };
+        registry.broadcast_ride_event(ride_id, frame("ride.driver.location_updated"));
+        assert!(network.try_recv().is_err());
+        registry.broadcast_ride_event(ride_id, frame("ride.updated"));
+        let first = network.try_recv().unwrap();
+        assert_eq!(first.payload["type"], "admin.ride.changed");
+        assert!(!first.payload.to_string().contains("private"));
+        registry.broadcast_ride_event(ride_id, frame("ride.updated"));
+        assert_ne!(first.id, network.try_recv().unwrap().id);
+    }
+}

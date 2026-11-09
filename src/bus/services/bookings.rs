@@ -1,8 +1,7 @@
 use super::*;
 use crate::logs::{ActivityLog, ActivityType};
-use diesel::OptionalExtension;
-use diesel::PgTextExpressionMethods;
 use diesel::prelude::*;
+use diesel::{OptionalExtension, PgTextExpressionMethods};
 use diesel_async::RunQueryDsl;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
@@ -111,7 +110,12 @@ pub async fn create_booking(
     let total_passengers = 1 + payload.num_of_kids;
     if bus.current_passenger_count + total_passengers > bus.capacity {
         return Err(ApiError::Error(
-            format!("Bus cannot accommodate {} passengers. Only {} seats left.", total_passengers, bus.capacity - bus.current_passenger_count).into()
+            format!(
+                "Bus cannot accommodate {} passengers. Only {} seats left.",
+                total_passengers,
+                bus.capacity - bus.current_passenger_count
+            )
+            .into(),
         ));
     }
 
@@ -173,7 +177,6 @@ pub async fn create_booking(
     if route.fare == 0.0 {
         new_booking.payment_status = PaymentStatus::Free;
     }
-
 
     // 10. Generate QR code and attach it before insert
     let qr_payload = build_signed_qr_payload(&new_booking)?;
@@ -324,8 +327,7 @@ pub async fn create_booking(
                 .map_err(|e| ApiError::InternalError(e.to_string().into()))?;
 
             // Emit activity log for return booking
-            let mut return_log =
-                ActivityLog::new(ActivityType::BookingCreated, current_user_id);
+            let mut return_log = ActivityLog::new(ActivityType::BookingCreated, current_user_id);
             return_log.set_target_id(created_return.id);
             return_log.set_target_type("Booking".to_string());
             if let Ok(details) = serde_json::to_value(&created_return) {

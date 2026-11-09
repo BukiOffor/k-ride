@@ -1,6 +1,3 @@
-schedule round trip
-flip the trip
-at the point of marking a trip as completed, reasign the bus to the return trip
+driver to server connection over a particular ride must persist till the ride is started, because the driver needs to know if the client has cancelled.
 
-
-add num of kids to an adult pass and increase bus seats 
+when ride is requested, open a webscoket to the browser and update search state, that is if its searching, found, accepted, rejected and others.

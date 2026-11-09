@@ -9,7 +9,8 @@ pub use dto::*;
 pub use model::{RoleType, User};
 
 // Axum re-exports for handler convenience
-pub use axum::{extract::*, routing::*};
+pub use axum::extract::*;
+pub use axum::routing::*;
 
 // Error type used by handlers/services
 pub use crate::errors::ModuleError as ApiError;

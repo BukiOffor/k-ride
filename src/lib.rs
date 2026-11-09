@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod auth;
 pub mod bus;
 pub mod config;
@@ -6,10 +7,12 @@ pub mod helpers;
 pub mod logs;
 pub mod macros;
 pub mod mailer;
+pub mod rentals;
 pub mod schema;
 pub mod traits;
 pub mod types;
 pub mod users;
+pub mod vrp;
 
 // ==================================================================================================================================================================
 // ==================================================================================================================================================================
@@ -18,11 +21,10 @@ pub mod users;
 // ==================================================================================================================================================================
 pub use self::errors::ModuleError;
 pub use axum::Router;
+pub use axum::extract::*;
 use axum::middleware;
-pub use axum::{
-    extract::*,
-    routing::{delete, get, patch, post, put},
-};
+pub use axum::routing::{delete, get, patch, post, put};
+use dispatcher::RideDispatcher;
 pub use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tower::ServiceBuilder;
@@ -51,8 +53,12 @@ pub type Logger = async_channel::Sender<logs::ActivityLog>;
 
 #[derive(Clone)]
 pub struct AppState {
+    /// Bounded email wakeup channel; delivery runs in async outbox workers.
+    pub mailer: async_channel::Sender<mailer::types::MailerEvent>,
     pub pool: Arc<Pool>,
     pub logger: Logger,
+    pub dispatcher: Arc<RideDispatcher>,
+    pub ws_registry: Arc<vrp::realtime::WsRegistry>,
 }
 // ==================================================================================================================================================================
 // ==================================================================================================================================================================

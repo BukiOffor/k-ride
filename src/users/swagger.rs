@@ -21,6 +21,11 @@ use utoipa::OpenApi;
         super::dto::UpdateUserDto,
         super::model::User,
         super::UserDto,
+        super::dto::DriverRegistrationDto,
+        super::dto::DriverProfileDto,
+        super::dto::LicenceClass,
+        super::dto::DriverTrack,
+        super::dto::PassengerSeats,
     ))
 )]
 pub struct UsersApiDoc;

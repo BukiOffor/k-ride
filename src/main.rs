@@ -1,16 +1,26 @@
-use axum::http::{Method, header::*};
+use axum::extract::DefaultBodyLimit;
+use axum::http::header::*;
+use axum::http::{HeaderName, Method};
 use diesel_migrations::{EmbeddedMigrations, embed_migrations};
+use dispatcher::RideDispatcher;
 use k_rides::AppState;
 use k_rides::auth::swagger::AuthApiDoc;
 use k_rides::bus::swagger::BusApiDoc;
 use k_rides::logs::swagger::LogsApiDoc;
 use k_rides::users::swagger::UsersApiDoc;
+use k_rides::vrp::swagger::VrpApiDoc;
+use redis::aio::ConnectionManager;
 use std::sync::Arc;
-use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
+use tower_http::compression::CompressionLayer;
+use tower_http::cors::CorsLayer;
+use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
+/// Maximum allowed request payload size (10 MB).
+pub const MAX_PAYLOAD_SIZE: usize = 10 * 1024 * 1024;
 
 #[tokio::main]
 async fn main() {
@@ -32,11 +42,35 @@ async fn main() {
 
     let (logger, logger_receiver) = async_channel::bounded::<k_rides::logs::ActivityLog>(10000);
 
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
+    let client = redis::Client::open(redis_url.as_str()).expect("Failed to create Redis client");
+    let connection_manager = ConnectionManager::new(client)
+        .await
+        .expect("Failed to create Redis connection manager");
+
+    // 1. Initialize H3 Engine
+    let dispatcher = RideDispatcher::new(connection_manager);
+
+    // 2. Initialize in-memory WebSocket DashMap registry & start stale connection cleaner worker
+    let ws_registry = Arc::new(k_rides::vrp::realtime::WsRegistry::new());
+    ws_registry.start_stale_connection_cleaner(
+        std::time::Duration::from_secs(15),
+        std::time::Duration::from_secs(60),
+    );
+
+    let (mailer, mail_receiver) = async_channel::bounded(256);
     let state: Arc<AppState> = AppState {
+        mailer,
         pool: pool.clone(),
         logger: logger.clone(),
+        dispatcher: Arc::new(dispatcher),
+        ws_registry,
     }
     .into();
+
+    let _mail_workers = k_rides::mailer::worker::start(state.clone(), mail_receiver);
+    let _scheduled_worker = k_rides::vrp::scheduled_worker::start(state.clone());
 
     // Seed default root user if no root user exists
     if let Err(e) = k_rides::users::services::seed_root_user(state.clone()).await {
@@ -53,6 +87,8 @@ async fn main() {
         ])
         .allow_headers([
             CONTENT_TYPE,
+            AUTHORIZATION,
+            HeaderName::from_static("idempotency-key"),
             ACCESS_CONTROL_ALLOW_HEADERS,
             ACCESS_CONTROL_ALLOW_CREDENTIALS,
             ACCESS_CONTROL_ALLOW_ORIGIN,
@@ -74,6 +110,9 @@ async fn main() {
 
     let app = k_rides::users::handlers::routes(state.clone())
         .merge(k_rides::bus::handlers::routes(state.clone()))
+        .merge(k_rides::vrp::handlers::routes(state.clone()))
+        .merge(k_rides::admin::handlers::routes(state.clone()))
+        .merge(k_rides::rentals::routes(state.clone()))
         .merge(k_rides::auth::handlers::routes(state.clone()))
         .merge(k_rides::logs::handlers::routes(state.clone()))
         .layer(CompressionLayer::new())
@@ -82,12 +121,22 @@ async fn main() {
 
     let mut openapi = UsersApiDoc::openapi();
     openapi.merge(BusApiDoc::openapi());
+    openapi.merge(k_rides::rentals::RentalApiDoc::openapi());
+    openapi.merge(VrpApiDoc::openapi());
     openapi.merge(AuthApiDoc::openapi());
     openapi.merge(LogsApiDoc::openapi());
+    openapi.merge(k_rides::vrp::handlers::scheduled::ScheduledApiDoc::openapi());
+    openapi.merge(k_rides::admin::swagger::AdminApiDoc::openapi());
+
+    let ws_routes =
+        axum::Router::new().nest("/rides", k_rides::vrp::realtime::routes(state.clone()));
 
     let api = axum::Router::new()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi))
-        .nest("/api/v1", app);
+        .nest("/api/v1", app)
+        .merge(ws_routes)
+        .layer(DefaultBodyLimit::max(MAX_PAYLOAD_SIZE))
+        .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_SIZE));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:9990").await.unwrap();
     k_rides::info!("Listening on {}", listener.local_addr().unwrap());

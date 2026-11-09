@@ -1,13 +1,12 @@
 #![allow(unused_variables)]
 
-use crate::{auth::jwt::Claims, users::RoleType};
-use axum::{
-    debug_middleware,
-    extract::{Request, State},
-    http::StatusCode,
-    middleware::Next,
-    response::Response,
-};
+use crate::auth::jwt::Claims;
+use crate::users::RoleType;
+use axum::debug_middleware;
+use axum::extract::{Request, State};
+use axum::http::StatusCode;
+use axum::middleware::Next;
+use axum::response::Response;
 use std::sync::Arc;
 pub use tokio::task_local;
 

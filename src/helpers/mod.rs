@@ -1,8 +1,8 @@
+pub mod fares;
 use super::*;
-use argon2::{
-    Argon2,
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
-};
+use argon2::Argon2;
+use argon2::password_hash::rand_core::OsRng;
+use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 
 pub fn password_verfier(password: &str, hash: &str) -> bool {
     let argon2 = Argon2::default();
@@ -46,3 +46,6 @@ pub fn parse_time_stamp(date_str: &str, time: &str) -> Result<NaiveDateTime, Mod
     let naive_datetime = naive_date.and_time(time);
     Ok(naive_datetime)
 }
+
+#[cfg(test)]
+mod routing_tests;

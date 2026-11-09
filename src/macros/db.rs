@@ -9,7 +9,7 @@
 /// Returns a `ModuleError::InternalError` if the insertion fails, including the error message and table name.
 ///
 /// # Example
-/// ```rust
+/// ```rust,ignore
 /// let mut conn = pool.get().await.map_err(|e| ModuleError::InternalError(e.to_string()))?;
 /// let user_task = UserTasks { user_id: payload.user_id,task_id: payload.subject};
 /// insert!(user_tasks::table, user_task, conn);
@@ -131,7 +131,7 @@ macro_rules! insert {
 /// Returns a `ModuleError::InternalError` if the update operation fails, including the error message and table name.
 ///
 /// # Example
-/// ```rust
+/// ```rust,ignore
 /// update!(users::table, updated_user, conn);
 /// ```
 #[macro_export]
@@ -150,7 +150,7 @@ macro_rules! update {
 /// # Variants
 ///
 /// ## 1. Fetch all rows from a table
-/// ```rust
+/// ```rust,ignore
 /// fetch!(table_path, ReturnType, conn)
 /// ```
 /// - `table_path`: Path to the Diesel table.
@@ -160,7 +160,7 @@ macro_rules! update {
 /// Returns a `Vec<ReturnType>` or propagates a `ModuleError::InternalError` on failure.
 ///
 /// ## 2. Fetch a single row by filter
-/// ```rust
+/// ```rust,ignore
 /// fetch!(table_path, filter_path, value, ReturnType, conn)
 /// ```
 /// - `table_path`: Path to the Diesel table.

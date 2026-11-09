@@ -31,6 +31,16 @@ pub struct ActivityLog {
 )]
 #[diesel(sql_type = diesel::sql_types::Text)]
 pub enum ActivityType {
+    AdminAction,
+    RideSafetyAction,
+    IncidentAction,
+    DriverVerificationAction,
+    DriverInspectionAction,
+    DriverOversightAction,
+    PassengerRestrictionAction,
+    MembershipCheckAction,
+    QualityFlagAction,
+    ReportExportAction,
     AccountCreated,
     UserLogin,
     UserLogout,
@@ -68,6 +78,11 @@ pub enum ActivityType {
     BookingPaymentUpdated,
     RideRequestCreated,
     RideRequestDeleted,
+    CarCreated,
+    CarUpdated,
+    CarDeleted,
+    CarAssigned,
+    CarUnassigned,
 }
 
 impl FromSql<Text, diesel::pg::Pg> for ActivityType {
@@ -136,6 +151,16 @@ impl ActivityLog {
 impl ActivityType {
     pub fn message(&self) -> String {
         match self {
+            ActivityType::RideSafetyAction => "Updated a ride safety alert.".into(),
+            ActivityType::IncidentAction => "Updated a safety incident.".into(),
+            ActivityType::DriverVerificationAction => "Reviewed a driver application.".into(),
+            ActivityType::DriverInspectionAction => "Scheduled a driver inspection.".into(),
+            ActivityType::DriverOversightAction => "Changed driver account oversight.".into(),
+            ActivityType::PassengerRestrictionAction => "Changed ride request restrictions.".into(),
+            ActivityType::MembershipCheckAction => "Requested a membership check.".into(),
+            ActivityType::QualityFlagAction => "Changed a quality flag.".into(),
+            ActivityType::ReportExportAction => "Exported paid rides reports.".into(),
+            ActivityType::AdminAction => "Performed a paid rides administration action.".into(),
             ActivityType::UserLogin => "Logged into the system.".into(),
             ActivityType::UserLogout => "Logged out of the system.".into(),
             Self::AccountCreated => "Account created ".into(),
@@ -173,6 +198,11 @@ impl ActivityType {
             ActivityType::BookingPaymentUpdated => "Updated booking payment status.".into(),
             ActivityType::RideRequestCreated => "Requested a ride.".into(),
             ActivityType::RideRequestDeleted => "Deleted a ride request.".into(),
+            ActivityType::CarCreated => "Created a new car.".into(),
+            ActivityType::CarUpdated => "Updated car details.".into(),
+            ActivityType::CarDeleted => "Deleted a car.".into(),
+            ActivityType::CarAssigned => "Assigned car to user.".into(),
+            ActivityType::CarUnassigned => "Unassigned car from user.".into(),
         }
     }
 }

@@ -1,0 +1,10 @@
+DROP TRIGGER IF EXISTS scheduled_price_lock ON rides;
+DROP TRIGGER IF EXISTS scheduled_live_sync ON rides;
+DROP TRIGGER IF EXISTS scheduled_live_guard ON rides;
+DROP FUNCTION IF EXISTS scheduled_locked_fare(),scheduled_sync_live_ride(),scheduled_guard_live_ride();
+DROP TRIGGER IF EXISTS scheduled_changes ON scheduled_rides;
+DROP FUNCTION IF EXISTS scheduled_changed();
+DROP FUNCTION IF EXISTS scheduled_emit(uuid,text,boolean,uuid);
+DROP VIEW IF EXISTS scheduled_ride_view;
+DROP FUNCTION IF EXISTS scheduled_driver_eligible(uuid,jsonb),scheduled_next_broadcast(timestamp);
+DROP TABLE IF EXISTS scheduled_events,email_outbox,scheduled_rides;
