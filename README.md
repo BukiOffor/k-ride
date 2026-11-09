@@ -1,98 +1,131 @@
-# Base Server
+# K-Ride Backend (`k-rides`)
 
-A robust, production-ready Rust server template designed to provide a solid foundation for building scalable web applications. This project comes pre-configured with essential boilerplate, authentication, and documentation tools.
+> **Project Status — MVP:** This repository contains the **Minimum Viable Product (MVP)** backend for the **K-Ride** mobility and transportation platform. Core flows—including on-demand private rides, scheduled rides, bus/shuttle bookings, and multi-day car rentals—are implemented. **Ride sharing (pooled multi-passenger rides) is not yet implemented and is planned for an upcoming release.**
 
-## 🚀 Tech Stack
+---
 
-- **Framework**: [Axum](https://github.com/tokio-rs/axum) - Ergonmic and modular web framework.
-- **ORM**: [Diesel](https://diesel.rs/) - Safe, extensible ORM and query builder.
-- **Runtime**: [Tokio](https://tokio.rs/) - Asynchronous runtime for Rust.
-- **Database**: PostgreSQL with [diesel-async](https://github.com/weiznich/diesel-async) and [bb8](https://github.com/djc/bb8) connection pooling.
-- **API Docs**: [Utoipa](https://github.com/juhakivekas/utoipa) - Auto-generated OpenAPI documentation and Swagger UI.
-- **Security**: Argon2 for password hashing and JWT for session management.
-- **Email**: [Lettre](https://github.com/lettre/lettre) for sending emails with Handlebars templating.
-- **Observability**: Tracing for structured logging and diagnostics.
+## Overview
 
-## ✨ Features
+**K-Ride** is a unified mobility backend built in Rust with Axum, Diesel (async PostgreSQL), Redis, and H3 spatial indexing. It powers urban and community transportation across four main verticals:
 
-- **Modular Architecture**: Clean separation between handlers, services, DTOs, and models.
-- **Built-in Authentication**: Ready-to-use user registration and login flows.
-- **Async Everything**: Leveraging Rust's async/await for high performance.
-- **Automatic Documentation**: Interactive Swagger UI available at `/swagger-ui`.
-- **Database Migrations**: Integrated Diesel migration support.
-- **Environment Driven**: Configuration managed via `.env` files.
-- **Production Ready**: Includes CORS, compression, and request tracing layers.
+1. **On-Demand Private Rides**: Real-time fare estimation over OSRM road routes, proximity-based driver dispatch using Uber H3 cells and Redis, live WebSocket ride events, 4-digit pickup PIN verification, waiting-time billing, ratings, and SOS safety reporting.
+2. **Scheduled Rides**: Advance private ride bookings (1 hour to 30 days ahead) with timezone validation, conflict/overlap prevention, a driver reservation board, and background workers for reminders and activation.
+3. **Bus & Shuttle Transit**: Route and stop management, bus fleet tracking, scheduled trips, seat bookings with QR code tickets, and passenger route demand requests.
+4. **Car Rentals**: Offline-assisted multi-day vehicle hire requests (`Saloon`, `SUV`, `Van`, 24-hour minimum duration) with daily pricing and administrator driver assignment.
 
-## 📂 Project Structure
+---
+
+## Current MVP Features vs. Roadmap
+
+### Included in the MVP
+- **Authentication & RBAC**: Argon2 password hashing, JWT (Bearer & HTTP-only cookie) authentication, password reset flows, and role-based access control (`User`, `Driver`, `RouteCoordinator`, `Admin`, `Root`).
+- **Driver & Vehicle Onboarding**: Vehicle registration (`Saloon`, `SUV`, `Van`), document tracking, and driver profile verification.
+- **Road-Validated Fare Engine**: Dynamic pricing based on distance, duration, base fare, minimum fare, waiting policy, and fixed-route rules (e.g., Nnamdi Azikiwe International Airport fixed fare).
+- **Spatial Dispatch Engine (`dispatcher` crate)**: H3 geospatial indexing backed by Redis and OSRM road-ETA ranking to match nearby available drivers.
+- **Real-Time WebSockets**: Live ride status transitions, driver location streaming, and offer notifications over `/rides`.
+- **Scheduled Ride & Email Outbox Workers**: Durable PostgreSQL-backed outbox queues for transactional emails (Lettre + Handlebars) and scheduled ride lifecycle events.
+- **Admin Operations & Audit Logs**: Administrative management for users, drivers, rides, safety incidents, rental assignments, and asynchronous activity logging.
+
+### Coming Soon (Post-MVP Roadmap)
+- **Ride Sharing (Pooled Rides)**: Matching multiple passengers heading in the same direction into a single vehicle, dynamic detour/waypoint optimization, capacity-aware dispatch, and shared fare splitting.
+- **Online Payment Gateway Integration**: Automated card/wallet settlement beyond cash and offline fulfillment.
+- **Self-Service Rental Fleet Calendars**: Automated vehicle availability calendars and organization-managed rental fleets.
+
+---
+
+## Tech Stack
+
+- **Web Framework**: [Axum](https://github.com/tokio-rs/axum) (REST API + WebSockets)
+- **Async Runtime**: [Tokio](https://tokio.rs/)
+- **Database & ORM**: PostgreSQL with [Diesel](https://diesel.rs/), [diesel-async](https://github.com/weiznich/diesel-async), and [bb8](https://github.com/djc/bb8) connection pooling
+- **Geospatial & Caching**: Redis + [h3o](https://github.com/HydroniumLabs/h3o) (H3 spatial index) + OSRM routing (`dispatcher` workspace crate)
+- **Authentication**: `jsonwebtoken` (JWT) + `argon2`
+- **Email Delivery**: [Lettre](https://github.com/lettre/lettre) with [Handlebars](https://github.com/sunng87/handlebars-rust) templates
+- **API Documentation**: [Utoipa](https://github.com/juhakivekas/utoipa) OpenAPI 3 + Swagger UI
+- **Tickets & Media**: `qrcode` and `image` for booking QR codes
+
+---
+
+## Project Structure
 
 ```text
-src/
-├── auth/          # Authentication logic (JWT, middleware)
-├── config.rs      # Configuration & environment management
-├── dto/            # Data Transfer Objects (Request/Response schemas)
-├── errors/         # Global error handling (ModuleError)
-├── handlers/       # Route handlers and API logic
-├── helpers/        # Utility functions (hashing, etc.)
-├── macros/         # Custom procedural macros
-├── mailer/         # Email service and templates
-├── models/         # Database models and Diesel mappings
-├── services/       # Business logic layer
-├── schema.rs       # Diesel generated database schema
-├── lib.rs          # Main library entry point
-└── main.rs         # Application entry point & server setup
+.
+├── dispatcher/            # H3 geospatial driver indexing & OSRM road-routing crate
+├── string_validator/      # Input validation helper crate
+├── migrations/            # Diesel PostgreSQL schema migrations
+└── src/
+    ├── admin/             # Admin management, incident handling, and oversight endpoints
+    ├── auth/              # Login, registration, JWT claims, and password recovery
+    ├── bus/               # Bus routes, points, trips, seat bookings, and QR codes
+    ├── helpers/           # Fare calculator, hashing, and shared utilities
+    ├── logs/              # Asynchronous activity logging workers and endpoints
+    ├── mailer/            # Transactional email templates and durable outbox worker
+    ├── rentals.rs         # Multi-day car rental requests and admin driver assignment
+    ├── users/             # User accounts, roles, and driver profile onboarding
+    ├── vrp/               # On-demand rides, scheduled rides, WebSocket realtime hub
+    ├── config.rs          # Database pool and worker initialization
+    ├── errors.rs          # Centralized error types and HTTP status mapping
+    ├── schema.rs          # Diesel database schema definitions
+    ├── lib.rs             # Shared application state and module exports
+    └── main.rs            # Server entrypoint, middleware, and route mounting
 ```
 
-## 🛠️ Getting Started
+---
+
+## Getting Started
 
 ### Prerequisites
 
-- [Rust](https://www.rust-lang.org/tools/install) (2024 edition)
-- [PostgreSQL](https://www.postgresql.org/)
-- [Diesel CLI](http://diesel.rs/guides/getting-started) (optional but recommended)
+- **Rust** (2024 edition)
+- **PostgreSQL**
+- **Redis**
+- **Diesel CLI** (`cargo install diesel_cli --no-default-features --features postgres`)
 
-### Setup
+### 1. Environment Configuration
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/BukiOffor/base_server.git
-   cd base_server
-   ```
+Create a `.env` file in the project root:
 
-2. **Configure environment variables**:
-   Create a `.env` file in the root directory:
-   ```env
-   DATABASE_URL=postgres://username:password@localhost/base_server
-   JWT_SECRET=your_super_secret_key
-   SMTP_HOST=smtp.example.com
-   SMTP_PORT=587
-   SMTP_USER=user@example.com
-   SMTP_PASS=password
-   ```
+```env
+DATABASE_URL=postgres://username:password@localhost:5432/k_ride
+REDIS_URL=redis://127.0.0.1:6379/
+JWT_SECRET=your_jwt_secret_key
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=user@example.com
+SMTP_PASS=password
+```
 
-3. **Run database migrations**:
-   The server runs migrations automatically on startup, but you can also run them manually:
-   ```bash
-   diesel migration run
-   ```
+### 2. Run Database Migrations
 
-4. **Start the server**:
-   ```bash
-   cargo run
-   ```
+Pending migrations run automatically when the server starts, or you can apply them manually with Diesel CLI:
 
-The server will be running at `http://localhost:9000/api/v1`.
+```bash
+diesel migration run
+```
 
-## 📜 API Documentation
+### 3. Run the Server
 
-Interactive API documentation is generated automatically. Once the server is running, visit:
+```bash
+cargo run
+```
 
-- **Swagger UI**: [http://localhost:9000/swagger-ui](http://localhost:9000/swagger-ui)
-- **OpenAPI JSON**: [http://localhost:9000/api-docs/openapi.json](http://localhost:9000/api-docs/openapi.json)
+The server listens on `0.0.0.0:9990`:
+- **REST API Base URL**: `http://localhost:9990/api/v1`
+- **WebSocket Endpoint**: `ws://localhost:9990/rides`
 
-## 🤝 Contributing
+---
 
-This project is intended as a base template. Feel free to clone, modify, and build your own services on top of it. Contributions to improve the core boilerplate are always welcome!
+## API Documentation
 
-## 📄 License
+Interactive OpenAPI documentation is generated automatically via Utoipa:
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+- **Swagger UI**: `http://localhost:9990/swagger-ui`
+- **OpenAPI JSON**: `http://localhost:9990/api-docs/openapi.json`
+
+---
+
+## Running Tests
+
+```bash
+cargo test --lib
+```
